@@ -24,8 +24,9 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-'minio',
-"uvicorn",
+  "minio",
+  "toml",
+  "uvicorn",
   "rich",
   "textual",
   "typer",
