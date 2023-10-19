@@ -37,7 +37,11 @@ async def get_shot(request: Request, path: str):
     try:
         imgdata = client.get_object("images.thoughts", imgname.replace(".png", ".webp"))
         print("streaming from minio")
-        return StreamingResponse(content=imgdata, media_type="image/webp")
+        return StreamingResponse(
+            content=imgdata,
+            media_type="image/webp",
+            headers={"Cache-Control": "max-age=604800"},
+        )
 
     except S3Error:
         print(f'failed to get {imgname.replace(".png", ".webp")} from minio')
@@ -51,6 +55,8 @@ async def get_shot(request: Request, path: str):
         "800",
         "-o",
         output,
+        "--wait",
+        "2000",
     ]
     console.log(f"running {cmd}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -100,7 +106,13 @@ async def get_shot(request: Request, path: str):
     try:
         imgdata = client.get_object("images.thoughts", imgname.replace(".png", ".webp"))
         print("streaming from minio")
-        return StreamingResponse(content=imgdata, media_type="image/webp")
+
+        # cache for 7 days
+        return StreamingResponse(
+            content=imgdata,
+            media_type="image/webp",
+            headers={"Cache-Control": "max-age=604800"},
+        )
 
     except S3Error:
         HTTPException(status_code=404, detail="image not found")
