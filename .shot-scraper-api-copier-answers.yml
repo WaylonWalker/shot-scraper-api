@@ -1,0 +1,11 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: a136907
+_src_path: /home/waylon/git/pytool-template
+author_github: waylonwalker
+author_name: Waylon Walker
+description: a fastapi api for shot scraper
+package_name: shot-scraper-api
+package_title: Shot Scraper Api
+package_title_input: Shot Scraper Api
+python_package: shot_scraper_api
+
