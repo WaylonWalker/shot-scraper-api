@@ -1,6 +1,10 @@
 version: "3"
 services:
-  web:
-    build: .
+  shot-wayl-one:
+    image: registry.wayl.one/shot-scraper-api
     ports:
-      - 5050:5000
+      - 5000
+    restart: always
+    labels:
+      kompose.service.expose: shotk.wayl.one
+      kompose.image-pull-secret: regcred

@@ -24,16 +24,17 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "minio",
-  "toml",
-  "uvicorn",
-  "rich",
-  "textual",
-  "typer",
   "anyconfig",
   "fastapi",
+  "jinja2",
+  "minio",
   "pydantic",
+  "rich",
   "shot_scraper",
+  "textual",
+  "toml",
+  "typer",
+  "uvicorn",
 ]
 dynamic = ["version"]
 

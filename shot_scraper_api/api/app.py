@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from minio import Minio
 from minio.error import S3Error
 import hashlib
@@ -8,17 +8,26 @@ import subprocess
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from fastapi.responses import FileResponse
 from shot_scraper_api.console import console
+from fastapi.templating import Jinja2Templates
 
 
 app = FastAPI()
+
+templates = Jinja2Templates(directory="templates")
 
 ACCESS_KEY = os.environ.get("ACCESS_KEY")
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
 
 @app.get("/")
-def get():
-    return {"message": "Hello World"}
+def get(request: Request):
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "env": os.environ,
+        },
+    )
 
 
 @app.get("/shot/", responses={200: {"content": {"image/png": {}}}})
