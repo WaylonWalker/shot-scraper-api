@@ -5,8 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-from fastapi.responses import RedirectResponse, Response, StreamingResponse
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from shot_scraper_api.console import console
 from fastapi.templating import Jinja2Templates
 
