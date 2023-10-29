@@ -1,21 +1,43 @@
 from fastapi import FastAPI, Request, HTTPException
+from typing import Optional
 from minio import Minio
 from minio.error import S3Error
 import hashlib
 import os
 from pathlib import Path
 import subprocess
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from shot_scraper_api.console import console
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from shot_scraper_api.config import config
 
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
+ENV = os.environ["ENV"]
 
 ACCESS_KEY = os.environ.get("ACCESS_KEY")
 SECRET_KEY = os.environ.get("SECRET_KEY")
+
+if ENV == "dev":
+    import arel
+
+    hot_reload = arel.HotReload(
+        paths=[
+            arel.Path("static"),
+            arel.Path("templates"),
+            arel.Path("shot_scraper_api"),
+        ],
+    )
+    app.add_websocket_route("/hot-reload", route=hot_reload, name="hot-reload")
+    app.add_event_handler("startup", hot_reload.startup)
+    app.add_event_handler("shutdown", hot_reload.shutdown)
+    templates.env.globals["DEBUG"] = True
+    templates.env.globals["hot_reload"] = hot_reload
+templates.env.filters["quote_plus"] = lambda u: quote_plus(str(u))
 
 
 @app.get("/")
@@ -29,12 +51,43 @@ def get(request: Request):
     )
 
 
-@app.get("/shot/", responses={200: {"content": {"image/png": {}}}})
-async def get_shot(request: Request, path: str):
-    if not path.startswith("http"):
-        raise HTTPException(status_code=404, detail="path is not a url")
+@app.get("/shot", responses={200: {"content": {"image/webp": {}}}})
+@app.get("/shot/", responses={200: {"content": {"image/webp": {}}}})
+async def get_shot(
+    request: Request,
+    url: str,
+    height: Optional[int] = 450,
+    width: Optional[int] = 800,
+    scaled_height: Optional[int | str] = None,
+    scaled_width: Optional[int | str] = None,
+):
+    scaled_height = int(scaled_height) if scaled_height else height
+    scaled_width = int(scaled_width) if scaled_width else width
+    if not url.startswith("http"):
+        raise HTTPException(status_code=404, detail="url is not a url")
 
-    imgname = (hashlib.md5(path.encode()).hexdigest() + ".png").lower()
+    hx_request_header = request.headers.get("hx-request")
+    imgname = (
+        hashlib.md5(url.encode()).hexdigest()
+        + f"-{width}x{height}-{scaled_width}x{scaled_height}.png"
+    ).lower()
+    print(
+        f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
+    )
+    if hx_request_header:
+        return templates.TemplateResponse(
+            "output.html",
+            {
+                "request": request,
+                "imgname": imgname,
+                "url": url,
+                "height": height,
+                "width": width,
+                "scaled_height": scaled_height,
+                "scaled_width": scaled_width,
+            },
+        )
+
     output = "/tmp/" + imgname
     output_webp = output.replace(".png", ".webp")
     client = Minio(
@@ -42,6 +95,7 @@ async def get_shot(request: Request, path: str):
         access_key=ACCESS_KEY,
         secret_key=SECRET_KEY,
     )
+    print(f"getting {imgname} from minio")
     try:
         imgdata = client.get_object("images.thoughts", imgname.replace(".png", ".webp"))
         print("streaming from minio")
@@ -56,11 +110,11 @@ async def get_shot(request: Request, path: str):
 
     cmd = [
         "shot-scraper",
-        path,
+        url,
         "-h",
-        "450",
+        str(height),
         "-w",
-        "800",
+        str(width),
         "-o",
         output,
         "--wait",
@@ -75,7 +129,7 @@ async def get_shot(request: Request, path: str):
         "convert",
         output,
         "-resize",
-        "722",
+        f"{scaled_width}x{scaled_height}",
         output,
     ]
     if Path(output).exists():

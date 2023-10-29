@@ -18,4 +18,4 @@ RUN pip3 install --no-cache-dir --root-user-action=ignore .
 
 EXPOSE 5000
 
-ENTRYPOINT shot-scraper-api api run
+ENTRYPOINT shot-scraper-api api run --env prod

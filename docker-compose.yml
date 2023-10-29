@@ -6,5 +6,5 @@ services:
       - 5000
     restart: always
     labels:
-      kompose.service.expose: shotk.wayl.one
+      kompose.service.expose: shots.wayl.one
       kompose.image-pull-secret: regcred

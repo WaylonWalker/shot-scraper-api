@@ -1,0 +1,10 @@
+<pre class="bg-zinc-900 container overflow-x-scroll mx-auto my-8 p-4 ring-4 ring-zinc-950/5 rounded-lg shadow-lg shadow-zinc-950">
+<code><span class="text-zinc-400"># markdown </span>
+[![screenshot of {{url}}]({{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}})](url)
+
+<span class="text-zinc-400"># curl</span>
+curl '{{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}' --output {{imgname}}
+    </code>
+</pre>
+<img class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}" alt="shot"
+    height="{{scaled_height}}" width="{{scaled_width}}" />

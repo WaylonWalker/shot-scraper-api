@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
   "anyconfig",
   "fastapi",
+  "arel",
   "jinja2",
   "minio",
   "pydantic",
@@ -34,7 +35,7 @@ dependencies = [
   "textual",
   "toml",
   "typer",
-  "uvicorn",
+  "uvicorn[standard]",
 ]
 dynamic = ["version"]
 

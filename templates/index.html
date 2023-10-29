@@ -1,15 +1,33 @@
-<!doctype html>
-<html lang="en">
+{% extends 'base.html' %}
+{% block content %}
+            <h1 class='mx-auto text-8xl font-black bg-gradient-to-r from-red-600 via-pink-500 to-yellow-400 inline-block text-transparent bg-clip-text text-shadow-xl text-shadow-zinc-950'>Shots</h1>
+        <div class="self-center justify-self-center bg-zinc-600/50 shadow-xl shadow-zinc-950/50 ring-4 ring-zinc-950/5 rounded-xl flex justify-center align-center flex-col">
+            <form class='flex flex-col align-center justify-center m-8 w-128' method="GET" hx-get='/shot/' hx-target='#results'>
+                <div class='flex flex-row items-center'>
+                <input class='mx-2 w-full bg-zinc-800 py-2 px-4 rounded' type="text" name="url" placeholder="http://example.com" />
+                </div>
+                <details>
+                    <summary class='mt-4'>Options</summary>
+                <div class='flex flex-row items-center mt-4 w-full justify-center'>
+                <input class='w-36 mx-2 bg-zinc-800 py-2 px-4 rounded' type="number" name="width" placeholder="width" value='800' />
+                <label for="width">px</label>
+                <span class='text-xl font-bold mx-2'>X</span>
+                <input class='w-36 mx-2 bg-zinc-800 py-2 px-4 rounded' type="number" name="height" placeholder="height" value='450' />
+                <label for="height">px</label>
+                </div>
 
-<head>
-    <title>shot-scraper-api</title>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link href="css/style.css" rel="stylesheet" />
-</head>
+                <div class='flex flex-row items-center mt-4 w-full justify-center'>
+                <label for="height">px</label>
+                <input class='w-36 mx-2 bg-zinc-800 py-2 px-4 rounded' type="number" name="scaled_width" placeholder="scaled_width" value=null />
+                <label for="width">px</label>
+                <span class='text-xl font-bold mx-2'>X</span>
+                <input class='w-36 mx-2 bg-zinc-800 py-2 px-4 rounded' type="number" name="scaled_height" placeholder="scaled_height" value=null />
+                <label for="width">px</label>
+                </div>
+                </details>
 
-<body>
-    COmIng so0n..ish
-</body>
-
-</html>
+                <input class='mt-6 mx-auto bg-zinc-800 px-6 py-2 rounded ring-4 ring-zinc-950/5 shadow-lg shadow-zinc-950/50' type="submit" value="Submit" />
+            </form>
+        </div>
+        <div class='' id='results'></div>
+{% endblock %}
