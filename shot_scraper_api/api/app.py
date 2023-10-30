@@ -99,7 +99,7 @@ async def get_shot(
     output = "/tmp/" + imgname
     output_webp = output.replace(".png", ".webp")
     client = Minio(
-        "sandcrawler.wayl.one",
+        "minio.wayl.one",
         access_key=ACCESS_KEY,
         secret_key=SECRET_KEY,
     )
