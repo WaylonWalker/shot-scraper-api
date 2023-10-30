@@ -8,6 +8,7 @@ tag:
     podman tag registry.wayl.one/shot-scraper-api registry.wayl.one/shot-scraper-api:$(git rev-parse --short HEAD)
 push:
     podman push registry.wayl.one/shot-scraper-api registry.wayl.one/shot-scraper-api:$(git rev-parse --short HEAD)
+    podman push registry.wayl.one/shot-scraper-api registry.wayl.one/shot-scraper-api:latest
 set-image:
     kubectl set image deployment/shot-wayl-one --namespace shot shot-wayl-one=registry.wayl.one/shot-scraper-api:$(git rev-parse --short HEAD)
 
@@ -24,7 +25,7 @@ delete:
 viz:
     k8sviz -n shot --kubeconfig $KUBECONFIG -t png -o shot-k8s.png
 restart:
-    kubectl rollout restart -n shot deployment/shot
+    kubectl rollout restart -n shot deployment/shot-wayl-one
 patch:
     kubectl patch -f deployment.yaml
 
