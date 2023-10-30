@@ -60,15 +60,22 @@ async def get_shot(
     width: Optional[int] = 800,
     scaled_height: Optional[int | str] = None,
     scaled_width: Optional[int | str] = None,
+    selectors: Optional[str] = None,
 ):
     scaled_height = int(scaled_height) if scaled_height else height
     scaled_width = int(scaled_width) if scaled_width else width
+    cmd_selectors = []
+
+    for selector in selectors.split(",") if selectors else []:
+        cmd_selectors.append("-s")
+        cmd_selectors.append(selector)
+
     if not url.startswith("http"):
         raise HTTPException(status_code=404, detail="url is not a url")
 
     hx_request_header = request.headers.get("hx-request")
     imgname = (
-        hashlib.md5(url.encode()).hexdigest()
+        hashlib.md5(f"{url}{''.join(cmd_selectors)}".encode()).hexdigest()
         + f"-{width}x{height}-{scaled_width}x{scaled_height}.png"
     ).lower()
     print(
@@ -85,6 +92,7 @@ async def get_shot(
                 "width": width,
                 "scaled_height": scaled_height,
                 "scaled_width": scaled_width,
+                "selectors": selectors,
             },
         )
 
@@ -119,6 +127,7 @@ async def get_shot(
         output,
         "--wait",
         "2000",
+        *cmd_selectors,
     ]
     console.log(f"running {cmd}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
