@@ -19,8 +19,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 ENV = os.environ["ENV"]
 
-ACCESS_KEY = os.environ.get("ACCESS_KEY")
-SECRET_KEY = os.environ.get("SECRET_KEY")
+ACCESS_KEY = os.environ.get("ACCESS_KEY").strip("\n")
+SECRET_KEY = os.environ.get("SECRET_KEY").strip("\n")
 
 if ENV == "dev":
     import arel
