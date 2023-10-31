@@ -6,11 +6,11 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse
 from shot_scraper_api.console import console
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from shot_scraper_api.config import config
+from urllib.parse import quote_plus
 
 
 app = FastAPI()
@@ -37,6 +37,7 @@ if ENV == "dev":
     app.add_event_handler("shutdown", hot_reload.shutdown)
     templates.env.globals["DEBUG"] = True
     templates.env.globals["hot_reload"] = hot_reload
+
 templates.env.filters["quote_plus"] = lambda u: quote_plus(str(u))
 
 
@@ -110,7 +111,10 @@ async def get_shot(
         return StreamingResponse(
             content=imgdata,
             media_type="image/webp",
-            headers={"Cache-Control": "max-age=604800"},
+            headers={
+                "Cache-Control": "max-age=604800",
+                "stale-while-revalidate": "86400",
+            },
         )
 
     except S3Error:
@@ -131,7 +135,7 @@ async def get_shot(
     ]
     console.log(f"running {cmd}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    res = proc.wait()
+    proc.wait()
     console.log(proc.stdout.read().decode())
     console.log(proc.stderr.read().decode())
     cmd = [
@@ -146,7 +150,7 @@ async def get_shot(
         resize_proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        res = resize_proc.wait()
+        resize_proc.wait()
         console.log(proc.stdout.read().decode())
         console.log(proc.stderr.read().decode())
     cmd = [
@@ -162,7 +166,7 @@ async def get_shot(
         webp_proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        res = webp_proc.wait()
+        webp_proc.wait()
         console.log(proc.stdout.read().decode())
         console.log(proc.stderr.read().decode())
 

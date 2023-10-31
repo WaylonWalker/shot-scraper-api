@@ -4,7 +4,10 @@ services:
     image: registry.wayl.one/shot-scraper-api
     ports:
       - 5000
+    environment:
+      - ACCESS_KEY=7FkTVSd7ti1sXANgVZnD
+      - SECRET_KEY=WDL6acr7GrMd9BVZGTECRVlahFbEDVZFYQtvxAm8
     restart: always
     labels:
-      kompose.service.expose: shots.wayl.one
-      kompose.image-pull-secret: regcred
+      kompose.service.expose: shots.wayl.one, shots.k.waylonwalker.com
+      # kompose.image-pull-secret: regcred
