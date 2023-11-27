@@ -10,4 +10,4 @@ services:
     restart: always
     labels:
       kompose.service.expose: shots.wayl.one, shots.k.waylonwalker.com
-      # kompose.image-pull-secret: regcred
+      kompose.image-pull-secret: regcred

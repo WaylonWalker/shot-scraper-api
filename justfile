@@ -2,6 +2,8 @@ default: build tag push set-image
 fresh: create-ns cred convert deploy viz
 update: convert patch
 
+regcred:
+    kubectl get secret -n default regcred --output=yaml -o yaml | sed 's/namespace: default/namespace: shot/' | kubectl apply -n shot -f - && echo deployed secret || echo secret exists
 build:
     podman build -t registry.wayl.one/shot-scraper-api -f Dockerfile .
 tag:

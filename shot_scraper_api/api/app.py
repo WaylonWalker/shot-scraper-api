@@ -112,8 +112,7 @@ async def get_shot(
             content=imgdata,
             media_type="image/webp",
             headers={
-                "Cache-Control": "max-age=604800",
-                "stale-while-revalidate": "86400",
+                "Cache-Control": "public, max-age=86400, stale-while-revalidate=86400",
             },
         )
 
@@ -186,7 +185,9 @@ async def get_shot(
         return StreamingResponse(
             content=imgdata,
             media_type="image/webp",
-            headers={"Cache-Control": "max-age=604800"},
+            headers={
+                "Cache-Control": "public, max-age=86400, stale-while-revalidate=86400",
+            },
         )
 
     except S3Error:

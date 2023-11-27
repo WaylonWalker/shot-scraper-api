@@ -3,7 +3,8 @@ kind: Service
 metadata:
   annotations:
     kompose.cmd: kompose convert -o deployment.yaml -n shot --replicas 3
-    kompose.service.expose: shots.wayl.one
+    kompose.image-pull-secret: regcred
+    kompose.service.expose: shots.wayl.one, shots.k.waylonwalker.com
     kompose.version: 1.31.2 (a92241f79)
   creationTimestamp: null
   labels:
@@ -36,7 +37,8 @@ kind: Deployment
 metadata:
   annotations:
     kompose.cmd: kompose convert -o deployment.yaml -n shot --replicas 3
-    kompose.service.expose: shots.wayl.one
+    kompose.image-pull-secret: regcred
+    kompose.service.expose: shots.wayl.one, shots.k.waylonwalker.com
     kompose.version: 1.31.2 (a92241f79)
   creationTimestamp: null
   labels:
@@ -53,7 +55,8 @@ spec:
     metadata:
       annotations:
         kompose.cmd: kompose convert -o deployment.yaml -n shot --replicas 3
-        kompose.service.expose: shots.wayl.one
+        kompose.image-pull-secret: regcred
+        kompose.service.expose: shots.wayl.one, shots.k.waylonwalker.com
         kompose.version: 1.31.2 (a92241f79)
       creationTimestamp: null
       labels:
@@ -63,21 +66,17 @@ spec:
       containers:
         - env:
             - name: ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  key: ACCESS_KEY
-                  name: minio-access-key
+              value: 9pAY9zmhz6QuD7ZLIcUi
             - name: SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  key: SECRET_KEY
-                  name: minio-secret-key
+              value: 17ZYwvkycvuM2OTnowDiFLHStaxGrET1DxaFr5Nx
           image: registry.wayl.one/shot-scraper-api
           name: shot-wayl-one
           ports:
             - containerPort: 5000
               protocol: TCP
           resources: {}
+      imagePullSecrets:
+        - name: regcred
       restartPolicy: Always
 status: {}
 
@@ -87,7 +86,8 @@ kind: Ingress
 metadata:
   annotations:
     kompose.cmd: kompose convert -o deployment.yaml -n shot --replicas 3
-    kompose.service.expose: shots.wayl.one
+    kompose.image-pull-secret: regcred
+    kompose.service.expose: shots.wayl.one, shots.k.waylonwalker.com
     kompose.version: 1.31.2 (a92241f79)
   creationTimestamp: null
   labels:
@@ -97,6 +97,16 @@ metadata:
 spec:
   rules:
     - host: shots.wayl.one
+      http:
+        paths:
+          - backend:
+              service:
+                name: shot-wayl-one
+                port:
+                  number: 5000
+            path: /
+            pathType: Prefix
+    - host: shots.k.waylonwalker.com
       http:
         paths:
           - backend:
