@@ -1,17 +1,18 @@
-from fastapi import FastAPI, Request, HTTPException
-from typing import Optional
-from minio import Minio
-from minio.error import S3Error
 import hashlib
 import os
 from pathlib import Path
 import subprocess
-from fastapi.responses import StreamingResponse
-from shot_scraper_api.console import console
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+from typing import Optional
 from urllib.parse import quote_plus
 
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from minio import Minio
+from minio.error import S3Error
+
+from shot_scraper_api.console import console
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -52,17 +53,43 @@ def get(request: Request):
     )
 
 
-@app.get("/shot", responses={200: {"content": {"image/webp": {}}}})
-@app.get("/shot/", responses={200: {"content": {"image/webp": {}}}})
+@app.get(
+    "/shot/",
+    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+)
+@app.get(
+    "/shot",
+    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+)
+@app.get(
+    "/shot/{filename}",
+    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+)
+@app.get(
+    "/shot/{filename}/",
+    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+)
 async def get_shot(
     request: Request,
     url: str,
+    filename: Optional[str] = "screenshot.webp",
     height: Optional[int] = 450,
     width: Optional[int] = 800,
     scaled_height: Optional[int | str] = None,
     scaled_width: Optional[int | str] = None,
     selectors: Optional[str] = None,
 ):
+    # Get format from filename extension
+    ext = filename.split(".")[-1].lower() if "." in filename else "webp"
+    if ext not in ["webp", "png", "jpg", "jpeg"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+        )
+
+    # Normalize jpeg to jpg
+    format = "jpg" if ext == "jpeg" else ext
+
     scaled_height = int(scaled_height) if scaled_height else height
     scaled_width = int(scaled_width) if scaled_width else width
     cmd_selectors = []
@@ -77,7 +104,7 @@ async def get_shot(
     hx_request_header = request.headers.get("hx-request")
     imgname = (
         hashlib.md5(f"{url}{''.join(cmd_selectors)}".encode()).hexdigest()
-        + f"-{width}x{height}-{scaled_width}x{scaled_height}.png"
+        + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
     ).lower()
     print(
         f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
@@ -97,8 +124,8 @@ async def get_shot(
             },
         )
 
-    output = "/tmp/" + imgname
-    output_webp = output.replace(".png", ".webp")
+    output = "/tmp/" + imgname.replace(format, "png")
+    output_final = "/tmp/" + imgname
     client = Minio(
         "minio.wayl.one",
         access_key=ACCESS_KEY,
@@ -106,18 +133,19 @@ async def get_shot(
     )
     print(f"getting {imgname} from minio")
     try:
-        imgdata = client.get_object("images.thoughts", imgname.replace(".png", ".webp"))
+        imgdata = client.get_object("shots", imgname)
         print("streaming from minio")
         return StreamingResponse(
             content=imgdata,
-            media_type="image/webp",
+            media_type=f"image/{format}",
             headers={
-                "Cache-Control": "public, max-age=86400, stale-while-revalidate=86400",
+                "Cache-Control": "public, max-age=86400",
+                "Content-Type": f"image/{format}",
             },
         )
 
     except S3Error:
-        print(f'failed to get {imgname.replace(".png", ".webp")} from minio')
+        print(f"failed to get {imgname} from minio")
 
     cmd = [
         "shot-scraper",
@@ -152,43 +180,57 @@ async def get_shot(
         resize_proc.wait()
         console.log(proc.stdout.read().decode())
         console.log(proc.stderr.read().decode())
-    cmd = [
-        "cwebp",
-        "-q",
-        "80",
-        output,
-        "-o",
-        output_webp,
-    ]
+
+    # Convert to the requested format
+    if format == "webp":
+        cmd = [
+            "cwebp",
+            "-q",
+            "80",
+            output,
+            "-o",
+            output_final,
+        ]
+    elif format == "jpg":
+        cmd = [
+            "convert",
+            output,
+            "-quality",
+            "80",
+            output_final,
+        ]
+    else:  # PNG - just copy the file
+        cmd = ["cp", output, output_final]
+
     if Path(output).exists():
         console.log(f"running {cmd}")
-        webp_proc = subprocess.Popen(
+        convert_proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        webp_proc.wait()
+        convert_proc.wait()
         console.log(proc.stdout.read().decode())
         console.log(proc.stderr.read().decode())
 
-    if Path(output_webp).exists():
-        print("putting", output, imgname.replace(".png", ".webp"))
+    if Path(output_final).exists():
+        print("putting", output_final, imgname)
         client.fput_object(
-            "images.thoughts",
-            imgname.replace(".png", ".webp"),
-            output_webp,
+            "shots",
+            imgname,
+            output_final,
         )
 
     try:
-        imgdata = client.get_object("images.thoughts", imgname.replace(".png", ".webp"))
+        imgdata = client.get_object("shots", imgname)
         print("streaming from minio")
 
-        # cache for 7 days
         return StreamingResponse(
             content=imgdata,
-            media_type="image/webp",
+            media_type=f"image/{format}",
             headers={
-                "Cache-Control": "public, max-age=86400, stale-while-revalidate=86400",
+                "Cache-Control": "public, max-age=86400",
+                "Content-Type": f"image/{format}",
             },
         )
 
     except S3Error:
-        HTTPException(status_code=404, detail="image not found")
+        raise HTTPException(status_code=404, detail="image not found")
