@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 from minio.error import S3Error
 
@@ -16,6 +17,15 @@ from shot_scraper_api.console import console
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 templates = Jinja2Templates(directory="templates")
 ENV = os.environ["ENV"]
@@ -141,6 +151,8 @@ async def get_shot(
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Content-Type": f"image/{format}",
+                "Access-Control-Allow-Origin": "*",
+                "Cross-Origin-Resource-Policy": "cross-origin",
             },
         )
 
@@ -229,6 +241,8 @@ async def get_shot(
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Content-Type": f"image/{format}",
+                "Access-Control-Allow-Origin": "*",
+                "Cross-Origin-Resource-Policy": "cross-origin",
             },
         )
 

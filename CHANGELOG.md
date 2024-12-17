@@ -1,3 +1,7 @@
+## 0.0.3
+
+- open up CORS, maybe this fixes signal
+
 ## 0.0.2
 
 - fix dockerfile
