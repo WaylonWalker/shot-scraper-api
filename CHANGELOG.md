@@ -1,3 +1,7 @@
+## 0.0.4
+
+- add favicon.ico as a route
+
 ## 0.0.3
 
 - open up CORS, maybe this fixes signal

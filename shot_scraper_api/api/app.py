@@ -6,10 +6,10 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.middleware.cors import CORSMiddleware
 from minio import Minio
 from minio.error import S3Error
 
@@ -61,6 +61,12 @@ def get(request: Request):
             "env": os.environ,
         },
     )
+
+
+@app.get("/favicon.ico", response_class=FileResponse)
+async def get_favicon(request: Request):
+    output = "static/8bitcc.ico"
+    return FileResponse(output)
 
 
 @app.get(
