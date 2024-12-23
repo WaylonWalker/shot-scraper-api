@@ -1,4 +1,4 @@
-default: build push set-image
+default: build set-image
 fresh: create-ns cred convert deploy viz
 update: convert patch
 
@@ -6,15 +6,11 @@ regcred:
     kubectl get secret -n default regcred --output=yaml -o yaml | sed 's/namespace: default/namespace: shot/' | kubectl apply -n shot -f - && echo deployed secret || echo secret exists
 build:
     podman build \
-        -t docker.io/waylonwalker/shot-scraper-api \
-        -t docker.io/waylonwalker/shot-scraper-api:$(hatch version) \
         -t registry.wayl.one/shot-scraper-api \
         -t registry.wayl.one/shot-scraper-api:$(hatch version) \
         -f Dockerfile .
-
-push:
-    podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:$(hatch version)
-    podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:latest
+    # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:$(hatch version)
+    # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:latest
     podman push registry.wayl.one/shot-scraper-api:$(hatch version)
     podman push registry.wayl.one/shot-scraper-api:latest
 set-image:

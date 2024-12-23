@@ -1,3 +1,7 @@
+## 0.0.5
+
+- fix broken import
+
 ## 0.0.4
 
 - add favicon.ico as a route

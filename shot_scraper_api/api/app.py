@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from minio import Minio
@@ -30,8 +30,8 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 ENV = os.environ["ENV"]
 
-ACCESS_KEY = os.environ.get("ACCESS_KEY").strip("\n")
-SECRET_KEY = os.environ.get("SECRET_KEY").strip("\n")
+ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip("\n")
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip("\n")
 
 if ENV == "dev":
     import arel
