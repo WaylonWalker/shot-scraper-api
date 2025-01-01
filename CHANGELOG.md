@@ -1,3 +1,8 @@
+## 0.0.7
+
+- pyppeteer appears to be deprecated and caused 12s request time in prod
+- use playwright instead, request times drop to 1 - 1.5s locally
+
 ## 0.0.6
 
 - use pyppeteer instead of shot_scraper

@@ -13,13 +13,261 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from minio import Minio
 from minio.error import S3Error
-from pyppeteer import launch
+from playwright.async_api import async_playwright
 
 from shot_scraper_api.console import console
 
 load_dotenv()
 
+# Browser configuration
+class BrowserPool:
+    def __init__(self, max_browsers=2):
+        self.max_browsers = max_browsers
+        self.browsers = []
+        self.lock = asyncio.Lock()
+        self.playwright = None
+        self._ready = asyncio.Event()
+        
+    async def start(self):
+        """Initialize playwright and warm up the browser pool"""
+        if not self.playwright:
+            self.playwright = await async_playwright().start()
+            
+            # Pre-launch browsers up to max_browsers
+            async with self.lock:
+                for _ in range(self.max_browsers):
+                    try:
+                        browser = await self.playwright.chromium.launch(
+                            args=[
+                                '--disable-dev-shm-usage',
+                                '--disable-accelerated-2d-canvas',
+                                '--disable-gpu',
+                                '--disable-extensions',
+                                '--disable-background-networking',
+                                '--disable-background-timer-throttling',
+                                '--disable-backgrounding-occluded-windows',
+                                '--disable-breakpad',
+                                '--disable-client-side-phishing-detection',
+                                '--disable-component-extensions-with-background-pages',
+                                '--disable-default-apps',
+                                '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+                                '--disable-hang-monitor',
+                                '--disable-ipc-flooding-protection',
+                                '--disable-popup-blocking',
+                                '--disable-prompt-on-repost',
+                                '--disable-renderer-backgrounding',
+                                '--disable-sync',
+                                '--force-color-profile=srgb',
+                                '--metrics-recording-only',
+                                '--no-first-run',
+                                '--enable-automation',
+                                '--password-store=basic',
+                                '--use-mock-keychain',
+                            ]
+                        )
+                        browser_info = {
+                            'browser': browser,
+                            'in_use': False,
+                            'closed': False,
+                            'context': await browser.new_context(
+                                viewport={'width': 1920, 'height': 1080},
+                                java_script_enabled=True,
+                                bypass_csp=True,
+                                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                            )
+                        }
+                        self.browsers.append(browser_info)
+                    except Exception as e:
+                        console.log(f"Failed to launch browser during warmup: {str(e)}")
+            
+            # Signal that the pool is ready
+            self._ready.set()
+    
+    async def ensure_ready(self):
+        """Wait for the browser pool to be ready"""
+        await self._ready.wait()
+        
+    async def get_browser(self):
+        # Ensure pool is initialized
+        if not self._ready.is_set():
+            await self.start()
+        await self.ensure_ready()
+            
+        async with self.lock:
+            # Clean up crashed browsers
+            self.browsers = [b for b in self.browsers if not b.get('closed', True)]
+            
+            # Try to find an available browser
+            for browser_info in self.browsers:
+                if not browser_info['in_use']:
+                    browser_info['in_use'] = True
+                    return browser_info
+            
+            # If no browsers available and under limit, create new one
+            if len(self.browsers) < self.max_browsers:
+                try:
+                    browser = await self.playwright.chromium.launch(
+                        args=[
+                            '--disable-dev-shm-usage',
+                            '--disable-accelerated-2d-canvas',
+                            '--disable-gpu',
+                            '--disable-extensions',
+                            '--disable-background-networking',
+                            '--disable-background-timer-throttling',
+                            '--disable-backgrounding-occluded-windows',
+                            '--disable-breakpad',
+                            '--disable-client-side-phishing-detection',
+                            '--disable-component-extensions-with-background-pages',
+                            '--disable-default-apps',
+                            '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+                            '--disable-hang-monitor',
+                            '--disable-ipc-flooding-protection',
+                            '--disable-popup-blocking',
+                            '--disable-prompt-on-repost',
+                            '--disable-renderer-backgrounding',
+                            '--disable-sync',
+                            '--force-color-profile=srgb',
+                            '--metrics-recording-only',
+                            '--no-first-run',
+                            '--enable-automation',
+                            '--password-store=basic',
+                            '--use-mock-keychain',
+                        ]
+                    )
+                    browser_info = {
+                        'browser': browser,
+                        'in_use': True,
+                        'closed': False,
+                        'context': await browser.new_context(
+                            viewport={'width': 1920, 'height': 1080},
+                            java_script_enabled=True,
+                            bypass_csp=True,
+                            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        )
+                    }
+                    self.browsers.append(browser_info)
+                    return browser_info
+                except Exception as e:
+                    console.log(f"Failed to launch browser: {str(e)}")
+                    raise HTTPException(status_code=500, detail="Failed to launch browser")
+            
+            # Wait for an available browser
+            while True:
+                for browser_info in self.browsers:
+                    if not browser_info['in_use']:
+                        browser_info['in_use'] = True
+                        return browser_info
+                await asyncio.sleep(0.1)
+    
+    async def release_browser(self, browser_info):
+        async with self.lock:
+            if browser_info in self.browsers:
+                browser_info['in_use'] = False
+    
+    async def cleanup(self):
+        async with self.lock:
+            for browser_info in self.browsers:
+                try:
+                    if not browser_info['closed']:
+                        await browser_info['browser'].close()
+                        browser_info['closed'] = True
+                except:
+                    pass
+            self.browsers = []
+            if self.playwright:
+                await self.playwright.stop()
+                self.playwright = None
+
+# Global browser pool
+browser_pool = BrowserPool(max_browsers=2)
+
 app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize and warm up the browser pool during startup"""
+    try:
+        await browser_pool.start()
+        console.log("Browser pool initialized and warmed up")
+    except Exception as e:
+        console.log(f"Failed to initialize browser pool: {str(e)}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await browser_pool.cleanup()
+
+async def take_screenshot(url: str, width: int, height: int, selector_list: list, output: str):
+    # Ensure browser pool is ready before proceeding
+    await browser_pool.ensure_ready()
+    
+    browser_info = None
+    try:
+        browser_info = await browser_pool.get_browser()
+        context = browser_info['context']
+        
+        # Create new page with optimized settings
+        page = await context.new_page()
+        
+        try:
+            # Set viewport if different from default
+            if width != 1920 or height != 1080:
+                await page.set_viewport_size({"width": width, "height": height})
+
+            # Navigate with optimized settings
+            response = await page.goto(
+                url,
+                wait_until='domcontentloaded',
+                timeout=15000
+            )
+            
+            if not response or not response.ok:
+                raise HTTPException(
+                    status_code=response.status if response else 500,
+                    detail=f"Failed to load page: {response.status if response else 'Unknown error'}"
+                )
+
+            # Wait for network to be idle for a short time
+            try:
+                await page.wait_for_load_state('networkidle', timeout=2000)
+            except:
+                # Continue even if network doesn't become fully idle
+                pass
+
+            # Wait for selectors if specified
+            if selector_list:
+                for selector in selector_list:
+                    try:
+                        await page.wait_for_selector(selector, timeout=2000)
+                    except Exception as e:
+                        console.log(f"Selector {selector} not found: {str(e)}")
+
+            # Take screenshot with optimized settings
+            await page.screenshot(
+                path=output,
+                type='jpeg',
+                quality=80,
+                animations='disabled',
+                scale='device'
+            )
+            return True
+
+        finally:
+            await page.close()
+
+    except Exception as e:
+        console.log(f"Screenshot failed: {str(e)}")
+        if browser_info:
+            browser_info['closed'] = True
+            try:
+                await browser_info['browser'].close()
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to take screenshot: {str(e)}")
+
+    finally:
+        if browser_info:
+            await browser_pool.release_browser(browser_info)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Add CORS middleware
@@ -165,26 +413,9 @@ async def get_shot(
     except S3Error:
         print(f"failed to get {imgname} from minio")
 
-    # Launch browser
-    browser = await launch(args=["--no-sandbox"])
-    page = await browser.newPage()
-
-    # Set viewport
-    await page.setViewport({"width": width, "height": height})
-
-    # Navigate to URL
-    await page.goto(url, {"waitUntil": "networkidle0", "timeout": 30000})
-
-    # Wait for selectors if specified
-    for selector in selector_list:
-        try:
-            await page.waitForSelector(selector, {"timeout": 5000})
-        except:
-            console.log(f"Selector {selector} not found")
-
-    # Take screenshot
-    await page.screenshot({"path": output, "fullPage": False})
-    await browser.close()
+    success = await take_screenshot(url, width, height, selector_list, output)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to take screenshot")
 
     # Resize if needed
     if Path(output).exists() and (scaled_width != width or scaled_height != height):

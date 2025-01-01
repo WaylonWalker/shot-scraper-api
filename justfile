@@ -13,8 +13,6 @@ build:
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:latest
     podman push registry.wayl.one/shot-scraper-api:$(hatch version)
     podman push registry.wayl.one/shot-scraper-api:latest
-set-image:
-    kubectl set image deployment/shot-wayl-one --namespace shot shot-wayl-one=docker.io/waylonwalker/shot-scraper-api:$(hatch version)
 
 create-ns:
     kubectl create ns shot && echo created ns shot || echo namespace shot already exists
