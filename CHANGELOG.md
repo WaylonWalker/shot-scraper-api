@@ -1,13 +1,18 @@
-## 0.0.8
+## 0.0.9
+
+- fix dockerfile python install missing dependencies
+- request time is now around 2.5s in prod
+
+## 0.0.8 **broken**
 
 - run playwright installer in dockerfile
 
-## 0.0.7
+## 0.0.8 **broken**
 
 - pyppeteer appears to be deprecated and caused 12s request time in prod
 - use playwright instead, request times drop to 1 - 1.5s locally
 
-## 0.0.6
+## 0.0.8 **broken**
 
 - use pyppeteer instead of shot_scraper
 - request time drops from 6.5s to 2.5s
