@@ -1,10 +1,11 @@
+import asyncio
 import hashlib
 import os
 from pathlib import Path
-import subprocess
 from typing import Optional
 from urllib.parse import quote_plus
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -12,8 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from minio import Minio
 from minio.error import S3Error
+from pyppeteer import launch
 
 from shot_scraper_api.console import console
+
+load_dotenv()
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -108,18 +112,14 @@ async def get_shot(
 
     scaled_height = int(scaled_height) if scaled_height else height
     scaled_width = int(scaled_width) if scaled_width else width
-    cmd_selectors = []
-
-    for selector in selectors.split(",") if selectors else []:
-        cmd_selectors.append("-s")
-        cmd_selectors.append(selector)
+    selector_list = selectors.split(",") if selectors else []
 
     if not url.startswith("http"):
         raise HTTPException(status_code=404, detail="url is not a url")
 
     hx_request_header = request.headers.get("hx-request")
     imgname = (
-        hashlib.md5(f"{url}{''.join(cmd_selectors)}".encode()).hexdigest()
+        hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
         + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
     ).lower()
     print(
@@ -165,39 +165,43 @@ async def get_shot(
     except S3Error:
         print(f"failed to get {imgname} from minio")
 
-    cmd = [
-        "shot-scraper",
-        url,
-        "-h",
-        str(height),
-        "-w",
-        str(width),
-        "-o",
-        output,
-        "--wait",
-        "2000",
-        *cmd_selectors,
-    ]
-    console.log(f"running {cmd}")
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.wait()
-    console.log(proc.stdout.read().decode())
-    console.log(proc.stderr.read().decode())
-    cmd = [
-        "convert",
-        output,
-        "-resize",
-        f"{scaled_width}x{scaled_height}",
-        output,
-    ]
-    if Path(output).exists():
+    # Launch browser
+    browser = await launch(args=["--no-sandbox"])
+    page = await browser.newPage()
+
+    # Set viewport
+    await page.setViewport({"width": width, "height": height})
+
+    # Navigate to URL
+    await page.goto(url, {"waitUntil": "networkidle0", "timeout": 30000})
+
+    # Wait for selectors if specified
+    for selector in selector_list:
+        try:
+            await page.waitForSelector(selector, {"timeout": 5000})
+        except:
+            console.log(f"Selector {selector} not found")
+
+    # Take screenshot
+    await page.screenshot({"path": output, "fullPage": False})
+    await browser.close()
+
+    # Resize if needed
+    if Path(output).exists() and (scaled_width != width or scaled_height != height):
+        cmd = [
+            "convert",
+            output,
+            "-resize",
+            f"{scaled_width}x{scaled_height}",
+            output,
+        ]
         console.log(f"running {cmd}")
-        resize_proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        resize_proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        resize_proc.wait()
-        console.log(proc.stdout.read().decode())
-        console.log(proc.stderr.read().decode())
+        stdout, stderr = await resize_proc.communicate()
+        console.log(stdout.decode())
+        console.log(stderr.decode())
 
     # Convert to the requested format
     if format == "webp":
@@ -222,12 +226,12 @@ async def get_shot(
 
     if Path(output).exists():
         console.log(f"running {cmd}")
-        convert_proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        convert_proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        convert_proc.wait()
-        console.log(proc.stdout.read().decode())
-        console.log(proc.stderr.read().decode())
+        stdout, stderr = await convert_proc.communicate()
+        console.log(stdout.decode())
+        console.log(stderr.decode())
 
     if Path(output_final).exists():
         print("putting", output_final, imgname)

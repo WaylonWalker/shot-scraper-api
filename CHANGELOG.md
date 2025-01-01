@@ -1,3 +1,8 @@
+## 0.0.6
+
+- use pyppeteer instead of shot_scraper
+- request time drops from 6.5s to 2.5s
+
 ## 0.0.5
 
 - fix broken import
