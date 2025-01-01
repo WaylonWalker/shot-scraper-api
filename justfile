@@ -1,4 +1,4 @@
-default: build set-image
+default: build
 fresh: create-ns cred convert deploy viz
 update: convert patch
 

@@ -1,3 +1,7 @@
+## 0.0.8
+
+- run playwright installer in dockerfile
+
 ## 0.0.7
 
 - pyppeteer appears to be deprecated and caused 12s request time in prod

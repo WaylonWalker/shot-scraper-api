@@ -56,6 +56,7 @@ RUN pip3 install --no-cache-dir --root-user-action=ignore .
 # Copy application code
 COPY . /app
 RUN pip3 install --no-cache-dir --no-deps --root-user-action=ignore .
+RUN playwright install
 
 EXPOSE 5000
 
