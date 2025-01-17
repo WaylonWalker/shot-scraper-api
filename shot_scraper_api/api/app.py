@@ -5,19 +5,17 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from minio import Minio
 from minio.error import S3Error
 from playwright.async_api import async_playwright
 
+from shot_scraper_api.config import config
 from shot_scraper_api.console import console
 
-load_dotenv()
 
 # Browser configuration
 class BrowserPool:
@@ -27,150 +25,152 @@ class BrowserPool:
         self.lock = asyncio.Lock()
         self.playwright = None
         self._ready = asyncio.Event()
-        
+
     async def start(self):
         """Initialize playwright and warm up the browser pool"""
         if not self.playwright:
             self.playwright = await async_playwright().start()
-            
+
             # Pre-launch browsers up to max_browsers
             async with self.lock:
                 for _ in range(self.max_browsers):
                     try:
                         browser = await self.playwright.chromium.launch(
                             args=[
-                                '--disable-dev-shm-usage',
-                                '--disable-accelerated-2d-canvas',
-                                '--disable-gpu',
-                                '--disable-extensions',
-                                '--disable-background-networking',
-                                '--disable-background-timer-throttling',
-                                '--disable-backgrounding-occluded-windows',
-                                '--disable-breakpad',
-                                '--disable-client-side-phishing-detection',
-                                '--disable-component-extensions-with-background-pages',
-                                '--disable-default-apps',
-                                '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-                                '--disable-hang-monitor',
-                                '--disable-ipc-flooding-protection',
-                                '--disable-popup-blocking',
-                                '--disable-prompt-on-repost',
-                                '--disable-renderer-backgrounding',
-                                '--disable-sync',
-                                '--force-color-profile=srgb',
-                                '--metrics-recording-only',
-                                '--no-first-run',
-                                '--enable-automation',
-                                '--password-store=basic',
-                                '--use-mock-keychain',
+                                "--disable-dev-shm-usage",
+                                "--disable-accelerated-2d-canvas",
+                                "--disable-gpu",
+                                "--disable-extensions",
+                                "--disable-background-networking",
+                                "--disable-background-timer-throttling",
+                                "--disable-backgrounding-occluded-windows",
+                                "--disable-breakpad",
+                                "--disable-client-side-phishing-detection",
+                                "--disable-component-extensions-with-background-pages",
+                                "--disable-default-apps",
+                                "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+                                "--disable-hang-monitor",
+                                "--disable-ipc-flooding-protection",
+                                "--disable-popup-blocking",
+                                "--disable-prompt-on-repost",
+                                "--disable-renderer-backgrounding",
+                                "--disable-sync",
+                                "--force-color-profile=srgb",
+                                "--metrics-recording-only",
+                                "--no-first-run",
+                                "--enable-automation",
+                                "--password-store=basic",
+                                "--use-mock-keychain",
                             ]
                         )
                         browser_info = {
-                            'browser': browser,
-                            'in_use': False,
-                            'closed': False,
-                            'context': await browser.new_context(
-                                viewport={'width': 1920, 'height': 1080},
+                            "browser": browser,
+                            "in_use": False,
+                            "closed": False,
+                            "context": await browser.new_context(
+                                viewport={"width": 1920, "height": 1080},
                                 java_script_enabled=True,
                                 bypass_csp=True,
-                                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                            )
+                                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            ),
                         }
                         self.browsers.append(browser_info)
                     except Exception as e:
                         console.log(f"Failed to launch browser during warmup: {str(e)}")
-            
+
             # Signal that the pool is ready
             self._ready.set()
-    
+
     async def ensure_ready(self):
         """Wait for the browser pool to be ready"""
         await self._ready.wait()
-        
+
     async def get_browser(self):
         # Ensure pool is initialized
         if not self._ready.is_set():
             await self.start()
         await self.ensure_ready()
-            
+
         async with self.lock:
             # Clean up crashed browsers
-            self.browsers = [b for b in self.browsers if not b.get('closed', True)]
-            
+            self.browsers = [b for b in self.browsers if not b.get("closed", True)]
+
             # Try to find an available browser
             for browser_info in self.browsers:
-                if not browser_info['in_use']:
-                    browser_info['in_use'] = True
+                if not browser_info["in_use"]:
+                    browser_info["in_use"] = True
                     return browser_info
-            
+
             # If no browsers available and under limit, create new one
             if len(self.browsers) < self.max_browsers:
                 try:
                     browser = await self.playwright.chromium.launch(
                         args=[
-                            '--disable-dev-shm-usage',
-                            '--disable-accelerated-2d-canvas',
-                            '--disable-gpu',
-                            '--disable-extensions',
-                            '--disable-background-networking',
-                            '--disable-background-timer-throttling',
-                            '--disable-backgrounding-occluded-windows',
-                            '--disable-breakpad',
-                            '--disable-client-side-phishing-detection',
-                            '--disable-component-extensions-with-background-pages',
-                            '--disable-default-apps',
-                            '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-                            '--disable-hang-monitor',
-                            '--disable-ipc-flooding-protection',
-                            '--disable-popup-blocking',
-                            '--disable-prompt-on-repost',
-                            '--disable-renderer-backgrounding',
-                            '--disable-sync',
-                            '--force-color-profile=srgb',
-                            '--metrics-recording-only',
-                            '--no-first-run',
-                            '--enable-automation',
-                            '--password-store=basic',
-                            '--use-mock-keychain',
+                            "--disable-dev-shm-usage",
+                            "--disable-accelerated-2d-canvas",
+                            "--disable-gpu",
+                            "--disable-extensions",
+                            "--disable-background-networking",
+                            "--disable-background-timer-throttling",
+                            "--disable-backgrounding-occluded-windows",
+                            "--disable-breakpad",
+                            "--disable-client-side-phishing-detection",
+                            "--disable-component-extensions-with-background-pages",
+                            "--disable-default-apps",
+                            "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+                            "--disable-hang-monitor",
+                            "--disable-ipc-flooding-protection",
+                            "--disable-popup-blocking",
+                            "--disable-prompt-on-repost",
+                            "--disable-renderer-backgrounding",
+                            "--disable-sync",
+                            "--force-color-profile=srgb",
+                            "--metrics-recording-only",
+                            "--no-first-run",
+                            "--enable-automation",
+                            "--password-store=basic",
+                            "--use-mock-keychain",
                         ]
                     )
                     browser_info = {
-                        'browser': browser,
-                        'in_use': True,
-                        'closed': False,
-                        'context': await browser.new_context(
-                            viewport={'width': 1920, 'height': 1080},
+                        "browser": browser,
+                        "in_use": True,
+                        "closed": False,
+                        "context": await browser.new_context(
+                            viewport={"width": 1920, "height": 1080},
                             java_script_enabled=True,
                             bypass_csp=True,
-                            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        )
+                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        ),
                     }
                     self.browsers.append(browser_info)
                     return browser_info
                 except Exception as e:
                     console.log(f"Failed to launch browser: {str(e)}")
-                    raise HTTPException(status_code=500, detail="Failed to launch browser")
-            
+                    raise HTTPException(
+                        status_code=500, detail="Failed to launch browser"
+                    )
+
             # Wait for an available browser
             while True:
                 for browser_info in self.browsers:
-                    if not browser_info['in_use']:
-                        browser_info['in_use'] = True
+                    if not browser_info["in_use"]:
+                        browser_info["in_use"] = True
                         return browser_info
                 await asyncio.sleep(0.1)
-    
+
     async def release_browser(self, browser_info):
         async with self.lock:
             if browser_info in self.browsers:
-                browser_info['in_use'] = False
-    
+                browser_info["in_use"] = False
+
     async def cleanup(self):
         async with self.lock:
             for browser_info in self.browsers:
                 try:
-                    if not browser_info['closed']:
-                        await browser_info['browser'].close()
-                        browser_info['closed'] = True
+                    if not browser_info["closed"]:
+                        await browser_info["browser"].close()
+                        browser_info["closed"] = True
                 except:
                     pass
             self.browsers = []
@@ -178,10 +178,12 @@ class BrowserPool:
                 await self.playwright.stop()
                 self.playwright = None
 
+
 # Global browser pool
 browser_pool = BrowserPool(max_browsers=2)
 
 app = FastAPI()
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -192,22 +194,26 @@ async def startup_event():
     except Exception as e:
         console.log(f"Failed to initialize browser pool: {str(e)}")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     await browser_pool.cleanup()
 
-async def take_screenshot(url: str, width: int, height: int, selector_list: list, output: str):
+
+async def take_screenshot(
+    url: str, width: int, height: int, selector_list: list, output: str
+):
     # Ensure browser pool is ready before proceeding
     await browser_pool.ensure_ready()
-    
+
     browser_info = None
     try:
         browser_info = await browser_pool.get_browser()
-        context = browser_info['context']
-        
+        context = browser_info["context"]
+
         # Create new page with optimized settings
         page = await context.new_page()
-        
+
         try:
             # Set viewport if different from default
             if width != 1920 or height != 1080:
@@ -215,20 +221,18 @@ async def take_screenshot(url: str, width: int, height: int, selector_list: list
 
             # Navigate with optimized settings
             response = await page.goto(
-                url,
-                wait_until='domcontentloaded',
-                timeout=15000
+                url, wait_until="domcontentloaded", timeout=15000
             )
-            
+
             if not response or not response.ok:
                 raise HTTPException(
                     status_code=response.status if response else 500,
-                    detail=f"Failed to load page: {response.status if response else 'Unknown error'}"
+                    detail=f"Failed to load page: {response.status if response else 'Unknown error'}",
                 )
 
             # Wait for network to be idle for a short time
             try:
-                await page.wait_for_load_state('networkidle', timeout=2000)
+                await page.wait_for_load_state("networkidle", timeout=2000)
             except:
                 # Continue even if network doesn't become fully idle
                 pass
@@ -244,10 +248,10 @@ async def take_screenshot(url: str, width: int, height: int, selector_list: list
             # Take screenshot with optimized settings
             await page.screenshot(
                 path=output,
-                type='jpeg',
+                type="jpeg",
                 quality=80,
-                animations='disabled',
-                scale='device'
+                animations="disabled",
+                scale="device",
             )
             return True
 
@@ -257,16 +261,19 @@ async def take_screenshot(url: str, width: int, height: int, selector_list: list
     except Exception as e:
         console.log(f"Screenshot failed: {str(e)}")
         if browser_info:
-            browser_info['closed'] = True
+            browser_info["closed"] = True
             try:
-                await browser_info['browser'].close()
+                await browser_info["browser"].close()
             except:
                 pass
-        raise HTTPException(status_code=500, detail=f"Failed to take screenshot: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to take screenshot: {str(e)}"
+        )
 
     finally:
         if browser_info:
             await browser_pool.release_browser(browser_info)
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -280,12 +287,14 @@ app.add_middleware(
 )
 
 templates = Jinja2Templates(directory="templates")
-ENV = os.environ["ENV"]
 
-ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip("\n")
-SECRET_KEY = os.environ.get("SECRET_KEY", "").strip("\n")
+# ENV = os.environ["ENV"]
+# ACCESS_KEY = os.environ.get("ACCESS_KEY", "").strip("\n")
+# SECRET_KEY = os.environ.get("SECRET_KEY", "").strip("\n")
+# SECRET_KEY = os.environ.get("BUCKET_NAME", "shots").strip("\n")
 
-if ENV == "dev":
+
+if config.env == "dev":
     import arel
 
     hot_reload = arel.HotReload(
@@ -323,19 +332,19 @@ async def get_favicon(request: Request):
 
 @app.get(
     "/shot/",
-    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
 )
 @app.get(
     "/shot",
-    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
 )
 @app.get(
     "/shot/{filename}",
-    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
 )
 @app.get(
     "/shot/{filename}/",
-    responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
+    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
 )
 async def get_shot(
     request: Request,
@@ -370,11 +379,13 @@ async def get_shot(
         hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
         + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
     ).lower()
+    print(f'getting image for url "{url}"')
     print(
         f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
     )
     if hx_request_header:
-        return templates.TemplateResponse(
+        print(f'returning image template for url "{url}"')
+        response = templates.TemplateResponse(
             "output.html",
             {
                 "request": request,
@@ -387,21 +398,25 @@ async def get_shot(
                 "selectors": selectors,
             },
         )
+        return response
 
     output = "/tmp/" + imgname.replace(format, "png")
     output_final = "/tmp/" + imgname
-    client = Minio(
-        "minio.wayl.one",
-        access_key=ACCESS_KEY,
-        secret_key=SECRET_KEY,
-    )
-    print(f"getting {imgname} from minio")
-    try:
-        imgdata = client.get_object("shots", imgname)
-        print("streaming from minio")
-        return StreamingResponse(
-            content=imgdata,
-            media_type=f"image/{format}",
+
+    if config.s3_client.file_exists(imgname):
+        print(f"getting presigned url for {imgname} from minio")
+        # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
+        # print("streaming from minio")
+
+        url = await config.s3_client.get_file_url(imgname)
+
+        # url = "https://minio.wayl.one/shots-dev/8677021b0cb2a77677d6cd1da039623f-800x450-800x450.webp?AWSAccessKeyId=DSg2xoicDrBGbJoLrCuj&Signature=%2F3DVDvDDxL83QKn7erZ%2BfD8%2FIb4%3D&Expires=1737057467"
+        print(f"got presigned url: {url}")
+        if url is None:
+            breakpoint()
+        return RedirectResponse(
+            url=url,
+            status_code=307,  # Temporary redirect
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Content-Type": f"image/{format}",
@@ -410,9 +425,18 @@ async def get_shot(
             },
         )
 
-    except S3Error:
-        print(f"failed to get {imgname} from minio")
+        # return StreamingResponse(
+        #     content=imgdata,
+        #     media_type=f"image/{format}",
+        #     headers={
+        #         "Cache-Control": "public, max-age=86400",
+        #         "Content-Type": f"image/{format}",
+        #         "Access-Control-Allow-Origin": "*",
+        #         "Cross-Origin-Resource-Policy": "cross-origin",
+        #     },
+        # )
 
+    print(f'taking screenshot for "{url}"')
     success = await take_screenshot(url, width, height, selector_list, output)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to take screenshot")
@@ -466,19 +490,23 @@ async def get_shot(
 
     if Path(output_final).exists():
         print("putting", output_final, imgname)
-        client.fput_object(
-            "shots",
+        config.minio_client.fput_object(
+            config.bucket_name,
             imgname,
             output_final,
         )
 
     try:
-        imgdata = client.get_object("shots", imgname)
-        print("streaming from minio")
+        # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
+        # print("streaming from minio")
 
-        return StreamingResponse(
-            content=imgdata,
-            media_type=f"image/{format}",
+        url = await config.s3_client.get_file_url(imgname)
+        print(f"got presigned url: {url}")
+        if url is None:
+            breakpoint()
+        return RedirectResponse(
+            url=url,
+            status_code=307,  # Temporary redirect
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Content-Type": f"image/{format}",
@@ -486,6 +514,16 @@ async def get_shot(
                 "Cross-Origin-Resource-Policy": "cross-origin",
             },
         )
+        # return StreamingResponse(
+        #     content=imgdata,
+        #     media_type=f"image/{format}",
+        #     headers={
+        #         "Cache-Control": "public, max-age=86400",
+        #         "Content-Type": f"image/{format}",
+        #         "Access-Control-Allow-Origin": "*",
+        #         "Cross-Origin-Resource-Policy": "cross-origin",
+        #     },
+        # )
 
     except S3Error:
         raise HTTPException(status_code=404, detail="image not found")

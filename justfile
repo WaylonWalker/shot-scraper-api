@@ -11,8 +11,11 @@ build:
         -f Dockerfile .
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:$(hatch version)
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:latest
+push:
     podman push registry.wayl.one/shot-scraper-api:$(hatch version)
     podman push registry.wayl.one/shot-scraper-api:latest
+run:
+    podman run -p 5000:5000 registry.wayl.one/shot-scraper-api
 
 create-ns:
     kubectl create ns shot && echo created ns shot || echo namespace shot already exists

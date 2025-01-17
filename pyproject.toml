@@ -36,7 +36,9 @@ dependencies = [
   "jinja2",
   "minio",
   "pydantic",
+  "pydantic-settings",
   "rich",
+  "boto3",
   # "shot_scraper",
   "playwright",
   "python-dotenv",
@@ -45,6 +47,7 @@ dependencies = [
   "toml",
   "typer",
   "uvicorn[standard]",
+  "diskcache",
 ]
 dynamic = ["version"]
 

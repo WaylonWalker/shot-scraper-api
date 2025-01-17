@@ -2,16 +2,17 @@ import typer
 
 from shot_scraper_api.cli.common import verbose_callback
 from shot_scraper_api.cli.config import config_app
-from shot_scraper_api.cli.tui import tui_app
+
+# from shot_scraper_api.cli.tui import tui_app
 from shot_scraper_api.cli.api import api_app
 
 app = typer.Typer(
     name="shot_scraper_api",
     help="A rich terminal report for coveragepy.",
 )
-app.add_typer(config_app)
-app.add_typer(tui_app)
-app.add_typer(api_app)
+app.add_typer(config_app, name="config")
+# app.add_typer(tui_app)
+app.add_typer(api_app, name="api")
 
 
 def version_callback(value: bool) -> None:

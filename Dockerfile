@@ -76,5 +76,6 @@ RUN playwright install-deps
 COPY . /app
 
 EXPOSE 5000
+ENV env=prod
 
 CMD ["uvicorn", "shot_scraper_api.api.app:app", "--host", "0.0.0.0", "--port", "5000"]

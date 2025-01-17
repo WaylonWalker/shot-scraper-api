@@ -1,5 +1,5 @@
-import typer
 import os
+import typer
 
 from shot_scraper_api.config import config
 from shot_scraper_api.console import console
@@ -28,4 +28,8 @@ def run(
     os.environ["ENV"] = env
     console.quiet = False
     console.log(f"running {env}")
-    uvicorn.run(**config.get("api_server", {}).get(env, "dev"))
+    uvicorn.run(
+        "shot_scraper_api.api.app:app",
+        host=config.api_server_host,
+        port=config.api_server_port,
+    )

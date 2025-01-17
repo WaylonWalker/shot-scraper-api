@@ -1,3 +1,7 @@
+## 0.0.10
+
+- use presigned urls instead of serving static files
+
 ## 0.0.9
 
 - fix dockerfile python install missing dependencies
