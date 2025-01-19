@@ -10,13 +10,6 @@ from shot_scraper_api.s3 import S3Client
 class Config(BaseSettings):
     # Base Paths
     env: str = "dev"
-    api_server_host: str = "0.0.0.0"
-    api_server_port: int = 8000
-    # api_server: dict = {"dev": {"host": "0.0.0.0", "port": 8000}}
-    access_key: Optional[str] = Field(None)
-    secret_key: Optional[str] = Field(None)
-    bucket_name: Optional[str] = Field(None)
-    minio_url: Optional[str] = Field(None)
     aws_profile: Optional[str] = Field(None)
     aws_access_key_id: Optional[str] = Field(None)
     aws_secret_access_key: Optional[str] = Field(None)
@@ -25,6 +18,7 @@ class Config(BaseSettings):
     aws_bucket_name: Optional[str] = Field(None)
     docker_repo: Optional[str] = Field(None)
     max_file_size_mb: Optional[int] = Field(100)
+    cache_dir: Optional[str] = Field("/cache/")
 
     class Config:
         env_file = ".env"
@@ -48,16 +42,6 @@ class Config(BaseSettings):
                 "endpoint_url": self.aws_endpoint_url,
                 "region_name": self.aws_region,
             },
-        )
-
-    @property
-    def minio_client(self):
-        from minio import Minio
-
-        return Minio(
-            self.minio_url,
-            access_key=self.access_key,
-            secret_key=self.secret_key,
         )
 
     @property

@@ -1,3 +1,9 @@
+## 0.0.14
+
+- cleanup config
+- remove minio from requirements
+- add CACHE_DIR config
+
 ## 0.0.13
 
 - add an asycnio.sleep for animations to finish

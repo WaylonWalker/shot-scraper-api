@@ -5,6 +5,7 @@ from diskcache import Cache
 import io
 import logging
 import os
+from pathlib import Path
 
 
 class S3Client:
@@ -46,7 +47,7 @@ class S3Client:
     def _ensure_bucket_exists(self):
         """Ensure the configured bucket exists, create if it doesn't"""
         try:
-            self.s3.head_bucket(Bucket=self.config.bucket_name)
+            self.s3.head_bucket(Bucket=self.config.aws_bucket_name)
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code")
             if error_code == "404" or error_code == "NoSuchBucket":
@@ -54,11 +55,11 @@ class S3Client:
                 try:
                     if self.config.aws_endpoint_url:
                         # For MinIO/local S3, don't specify region
-                        self.s3.create_bucket(Bucket=self.config.bucket_name)
+                        self.s3.create_bucket(Bucket=self.config.aws_bucket_name)
                     else:
                         # For AWS S3, specify region
                         self.s3.create_bucket(
-                            Bucket=self.config.bucket_name,
+                            Bucket=self.config.aws_bucket_name,
                             CreateBucketConfiguration={
                                 "LocationConstraint": self.config.aws_region
                             },
@@ -91,7 +92,7 @@ class S3Client:
                 )
 
             with open(filepath, "rb") as file:
-                self.s3.upload_fileobj(file, self.config.bucket_name, filename)
+                self.s3.upload_fileobj(file, self.config.aws_bucket_name, filename)
         except ClientError as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
 
@@ -109,13 +110,15 @@ class S3Client:
             # Create file-like object from bytes
             file_obj = io.BytesIO(content)
 
-            self.s3.upload_fileobj(file_obj, self.config.bucket_name, filename)
+            self.s3.upload_fileobj(file_obj, self.config.aws_bucket_name, filename)
 
             # Generate URL based on endpoint
             if config.AWS_ENDPOINT_URL:
-                url = f"{config.AWS_ENDPOINT_URL}/{self.config.bucket_name}/{filename}"
+                url = f"{config.AWS_ENDPOINT_URL}/{self.config.aws_bucket_name}/{filename}"
             else:
-                url = f"https://{self.config.bucket_name}.s3.amazonaws.com/{filename}"
+                url = (
+                    f"https://{self.config.aws_bucket_name}.s3.amazonaws.com/{filename}"
+                )
             return url
         except ClientError as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
@@ -123,7 +126,9 @@ class S3Client:
     async def get_file(self, filename: str):
         """Get a file from S3"""
         try:
-            response = self.s3.get_object(Bucket=self.config.bucket_name, Key=filename)
+            response = self.s3.get_object(
+                Bucket=self.config.aws_bucket_name, Key=filename
+            )
             return response["Body"].read()
         except ClientError as e:
             raise Exception(f"Failed to get file from S3: {str(e)}")
@@ -145,14 +150,14 @@ class S3Client:
     async def delete_file(self, filename: str) -> None:
         """Delete a file from S3 bucket"""
         try:
-            self.s3.delete_object(Bucket=self.config.bucket_name, Key=filename)
+            self.s3.delete_object(Bucket=self.config.aws_bucket_name, Key=filename)
         except ClientError as e:
             raise Exception(f"Failed to delete file from S3: {str(e)}")
 
     async def list_files(self, prefix: str = None):
         """List all files in the bucket, optionally filtered by prefix"""
         try:
-            params = {"Bucket": self.config.bucket_name}
+            params = {"Bucket": self.config.aws_bucket_name}
             if prefix:
                 params["Prefix"] = prefix
 
@@ -194,7 +199,7 @@ class S3Client:
             bool: True if the file exists, False otherwise.
         """
         try:
-            self.s3.get_object(Bucket=self.config.bucket_name, Key=filename)
+            self.s3.get_object(Bucket=self.config.aws_bucket_name, Key=filename)
             return True
         except self.s3.exceptions.ClientError as e:
             error_code = e.response["Error"]["Code"]
@@ -223,22 +228,18 @@ class S3Client:
             str: Presigned URL
         """
 
-        cache_key = f"{self.config.bucket_name}:{object_name}:{http_method}:{download}"
-        with Cache("s3") as cache:
+        cache_key = (
+            f"{self.config.aws_bucket_name}:{object_name}:{http_method}:{download}"
+        )
+        with Cache(Path(self.config.cache_dir) / "s3") as cache:
             if cache.get(cache_key):
                 url = cache.get(object_name)
                 if url is not None:
                     return url
 
-        print("-" * 50)
-        print("-" * 50)
-        print(f"Generating presigned URL for {object_name}")
-        print("-" * 50)
-        print("-" * 50)
-
         try:
             params = {
-                "Bucket": self.config.bucket_name,
+                "Bucket": self.config.aws_bucket_name,
                 "Key": object_name,
             }
 
