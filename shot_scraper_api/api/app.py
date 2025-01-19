@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from minio.error import S3Error
 from playwright.async_api import async_playwright
 
 from shot_scraper_api.config import config
@@ -514,32 +513,28 @@ async def get_shot(
         #     output_final,
         # )
 
-    try:
         # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
         # print("streaming from minio")
 
-        url = await config.s3_client.get_file_url(imgname)
-        print(f"got presigned url: {url}")
-        return RedirectResponse(
-            url=url,
-            status_code=307,  # Temporary redirect
-            headers={
-                "Cache-Control": "public, max-age=86400",
-                "Content-Type": f"image/{format}",
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-            },
-        )
-        # return StreamingResponse(
-        #     content=imgdata,
-        #     media_type=f"image/{format}",
-        #     headers={
-        #         "Cache-Control": "public, max-age=86400",
-        #         "Content-Type": f"image/{format}",
-        #         "Access-Control-Allow-Origin": "*",
-        #         "Cross-Origin-Resource-Policy": "cross-origin",
-        #     },
-        # )
-
-    except S3Error:
-        raise HTTPException(status_code=404, detail="image not found")
+    url = await config.s3_client.get_file_url(imgname)
+    print(f"got presigned url: {url}")
+    return RedirectResponse(
+        url=url,
+        status_code=307,  # Temporary redirect
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Content-Type": f"image/{format}",
+            "Access-Control-Allow-Origin": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+    )
+    # return StreamingResponse(
+    #     content=imgdata,
+    #     media_type=f"image/{format}",
+    #     headers={
+    #         "Cache-Control": "public, max-age=86400",
+    #         "Content-Type": f"image/{format}",
+    #         "Access-Control-Allow-Origin": "*",
+    #         "Cross-Origin-Resource-Policy": "cross-origin",
+    #     },
+    # )

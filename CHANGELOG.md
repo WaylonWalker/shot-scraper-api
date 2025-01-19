@@ -1,4 +1,8 @@
-## 0.0.14
+## 0.0.15
+
+- remove broken minio import
+
+## 0.0.14 **broken**
 
 - cleanup config
 - remove minio from requirements
