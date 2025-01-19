@@ -251,10 +251,10 @@ async def take_screenshot(
 
             # Additional manual sleep time if specified
             if sleep_time > 0:
-                await page.wait_for_timeout(sleep_time)
+                await asyncio.sleep(sleep_time)
             else:
                 # Default small delay to allow initial animations to settle
-                await page.wait_for_timeout(500)
+                await asyncio.sleep(1)
 
             # Wait for selectors if specified
             if selector_list:

@@ -1,3 +1,7 @@
+## 0.0.13
+
+- add an asycnio.sleep for animations to finish
+
 ## 0.0.12
 
 - better wait for animations to finish
