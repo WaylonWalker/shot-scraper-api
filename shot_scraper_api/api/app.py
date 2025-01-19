@@ -412,8 +412,6 @@ async def get_shot(
 
         # url = "https://minio.wayl.one/shots-dev/8677021b0cb2a77677d6cd1da039623f-800x450-800x450.webp?AWSAccessKeyId=DSg2xoicDrBGbJoLrCuj&Signature=%2F3DVDvDDxL83QKn7erZ%2BfD8%2FIb4%3D&Expires=1737057467"
         print(f"got presigned url: {url}")
-        if url is None:
-            breakpoint()
         return RedirectResponse(
             url=url,
             status_code=307,  # Temporary redirect
@@ -490,11 +488,12 @@ async def get_shot(
 
     if Path(output_final).exists():
         print("putting", output_final, imgname)
-        config.minio_client.fput_object(
-            config.bucket_name,
-            imgname,
-            output_final,
-        )
+        await config.s3_client.upload_file(output_final, imgname)
+        # config.minio_client.fput_object(
+        #     config.bucket_name,
+        #     imgname,
+        #     output_final,
+        # )
 
     try:
         # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
@@ -502,8 +501,6 @@ async def get_shot(
 
         url = await config.s3_client.get_file_url(imgname)
         print(f"got presigned url: {url}")
-        if url is None:
-            breakpoint()
         return RedirectResponse(
             url=url,
             status_code=307,  # Temporary redirect

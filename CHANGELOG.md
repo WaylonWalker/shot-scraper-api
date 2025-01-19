@@ -1,3 +1,7 @@
+## 0.0.11
+
+- fix s3 file upload
+
 ## 0.0.10
 
 - use presigned urls instead of serving static files

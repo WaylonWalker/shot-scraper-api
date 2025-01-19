@@ -5,7 +5,6 @@ from diskcache import Cache
 import io
 import logging
 import os
-from typing import BinaryIO
 
 
 class S3Client:
@@ -39,7 +38,7 @@ class S3Client:
 
         # Create S3 client
         self.s3 = session.client(**client_args)
-        self.bucket = config.aws_bucket_name
+        self.config = config
 
         # Ensure bucket exists
         self._ensure_bucket_exists()
@@ -47,21 +46,21 @@ class S3Client:
     def _ensure_bucket_exists(self):
         """Ensure the configured bucket exists, create if it doesn't"""
         try:
-            self.s3.head_bucket(Bucket=self.bucket)
+            self.s3.head_bucket(Bucket=self.config.bucket_name)
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code")
             if error_code == "404" or error_code == "NoSuchBucket":
                 # Create bucket if it doesn't exist
                 try:
-                    if settings.AWS_ENDPOINT_URL:
+                    if self.config.aws_endpoint_url:
                         # For MinIO/local S3, don't specify region
-                        self.s3.create_bucket(Bucket=self.bucket)
+                        self.s3.create_bucket(Bucket=self.config.bucket_name)
                     else:
                         # For AWS S3, specify region
                         self.s3.create_bucket(
-                            Bucket=self.bucket,
+                            Bucket=self.config.bucket_name,
                             CreateBucketConfiguration={
-                                "LocationConstraint": settings.AWS_REGION
+                                "LocationConstraint": self.config.aws_region
                             },
                         )
                 except ClientError as create_error:
@@ -69,27 +68,30 @@ class S3Client:
             else:
                 raise Exception(f"Failed to access bucket: {str(e)}")
 
-    async def upload_file(self, file: BinaryIO, filename: str) -> str:
-        """Upload a file to S3 bucket and return its URL"""
-        try:
-            # Check file size
-            file.seek(0, os.SEEK_END)
-            size = file.tell()
-            file.seek(0)
+    async def upload_file(self, filepath: str, filename: str | None = None) -> str:
+        """Upload a file to S3 bucket and return its URL
 
-            if size > settings.MAX_FILE_SIZE:
+        Args:
+            filepath: Path to the file to upload
+            filename: Optional custom filename to use in S3. If not provided, uses basename of filepath
+        """
+        try:
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(f"File not found: {filepath}")
+
+            # Use provided filename or extract from path
+            if filename is None:
+                filename = os.path.basename(filepath)
+
+            # Check file size
+            size = os.path.getsize(filepath)
+            if size > self.config.max_file_size_mb * 1024 * 1024:
                 raise ValueError(
-                    f"File size exceeds maximum allowed size of {settings.MAX_FILE_SIZE} bytes"
+                    f"File size exceeds maximum allowed size of {self.config.max_file_size_mb} mb"
                 )
 
-            self.s3.upload_fileobj(file, self.bucket, filename)
-
-            # Generate URL based on endpoint
-            if settings.AWS_ENDPOINT_URL:
-                url = f"{settings.AWS_ENDPOINT_URL}/{self.bucket}/{filename}"
-            else:
-                url = f"https://{self.bucket}.s3.amazonaws.com/{filename}"
-            return url
+            with open(filepath, "rb") as file:
+                self.s3.upload_fileobj(file, self.config.bucket_name, filename)
         except ClientError as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
 
@@ -99,21 +101,21 @@ class S3Client:
             # Check file size
             size = len(content)
 
-            if size > settings.MAX_FILE_SIZE:
+            if size > config.MAX_FILE_SIZE:
                 raise ValueError(
-                    f"File size exceeds maximum allowed size of {settings.MAX_FILE_SIZE} bytes"
+                    f"File size exceeds maximum allowed size of {config.MAX_FILE_SIZE} bytes"
                 )
 
             # Create file-like object from bytes
             file_obj = io.BytesIO(content)
 
-            self.s3.upload_fileobj(file_obj, self.bucket, filename)
+            self.s3.upload_fileobj(file_obj, self.config.bucket_name, filename)
 
             # Generate URL based on endpoint
-            if settings.AWS_ENDPOINT_URL:
-                url = f"{settings.AWS_ENDPOINT_URL}/{self.bucket}/{filename}"
+            if config.AWS_ENDPOINT_URL:
+                url = f"{config.AWS_ENDPOINT_URL}/{self.config.bucket_name}/{filename}"
             else:
-                url = f"https://{self.bucket}.s3.amazonaws.com/{filename}"
+                url = f"https://{self.config.bucket_name}.s3.amazonaws.com/{filename}"
             return url
         except ClientError as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
@@ -121,7 +123,7 @@ class S3Client:
     async def get_file(self, filename: str):
         """Get a file from S3"""
         try:
-            response = self.s3.get_object(Bucket=self.bucket, Key=filename)
+            response = self.s3.get_object(Bucket=self.config.bucket_name, Key=filename)
             return response["Body"].read()
         except ClientError as e:
             raise Exception(f"Failed to get file from S3: {str(e)}")
@@ -143,14 +145,14 @@ class S3Client:
     async def delete_file(self, filename: str) -> None:
         """Delete a file from S3 bucket"""
         try:
-            self.s3.delete_object(Bucket=self.bucket, Key=filename)
+            self.s3.delete_object(Bucket=self.config.bucket_name, Key=filename)
         except ClientError as e:
             raise Exception(f"Failed to delete file from S3: {str(e)}")
 
     async def list_files(self, prefix: str = None):
         """List all files in the bucket, optionally filtered by prefix"""
         try:
-            params = {"Bucket": self.bucket}
+            params = {"Bucket": self.config.bucket_name}
             if prefix:
                 params["Prefix"] = prefix
 
@@ -192,7 +194,7 @@ class S3Client:
             bool: True if the file exists, False otherwise.
         """
         try:
-            self.s3.get_object(Bucket=self.bucket, Key=filename)
+            self.s3.get_object(Bucket=self.config.bucket_name, Key=filename)
             return True
         except self.s3.exceptions.ClientError as e:
             error_code = e.response["Error"]["Code"]
@@ -221,7 +223,7 @@ class S3Client:
             str: Presigned URL
         """
 
-        cache_key = f"{self.bucket}:{object_name}:{http_method}:{download}"
+        cache_key = f"{self.config.bucket_name}:{object_name}:{http_method}:{download}"
         with Cache("s3") as cache:
             if cache.get(cache_key):
                 url = cache.get(object_name)
@@ -236,7 +238,7 @@ class S3Client:
 
         try:
             params = {
-                "Bucket": self.bucket,
+                "Bucket": self.config.bucket_name,
                 "Key": object_name,
             }
 

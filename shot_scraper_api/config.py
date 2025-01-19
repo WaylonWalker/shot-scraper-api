@@ -24,6 +24,7 @@ class Config(BaseSettings):
     aws_endpoint_url: Optional[str] = Field(None)
     aws_bucket_name: Optional[str] = Field(None)
     docker_repo: Optional[str] = Field(None)
+    max_file_size_mb: Optional[int] = Field(100)
 
     class Config:
         env_file = ".env"
@@ -34,6 +35,20 @@ class Config(BaseSettings):
     @property
     def s3_client(self):
         return S3Client(self)
+
+    @property
+    def s3fs(self):
+        import s3fs
+
+        return s3fs.S3FileSystem(
+            key=self.aws_access_key_id,
+            secret=self.aws_secret_access_key,
+            endpoint_url=self.aws_endpoint_url,
+            client_kwargs={
+                "endpoint_url": self.aws_endpoint_url,
+                "region_name": self.aws_region,
+            },
+        )
 
     @property
     def minio_client(self):
