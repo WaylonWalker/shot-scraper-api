@@ -1,12 +1,16 @@
+## 0.0.12
+
+- better wait for animations to finish
+
 ## 0.0.11
 
 - fix s3 file upload
 
-## 0.0.10
+## 0.0.10 **broken**
 
 - use presigned urls instead of serving static files
 
-## 0.0.9
+## 0.0.9 **broken**
 
 - fix dockerfile python install missing dependencies
 - request time is now around 2.5s in prod

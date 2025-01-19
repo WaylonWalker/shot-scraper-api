@@ -201,7 +201,12 @@ async def shutdown_event():
 
 
 async def take_screenshot(
-    url: str, width: int, height: int, selector_list: list, output: str
+    url: str,
+    width: int,
+    height: int,
+    selector_list: list,
+    output: str,
+    sleep_time: int = 0,
 ):
     # Ensure browser pool is ready before proceeding
     await browser_pool.ensure_ready()
@@ -230,12 +235,26 @@ async def take_screenshot(
                     detail=f"Failed to load page: {response.status if response else 'Unknown error'}",
                 )
 
+            # Wait for full page load first
+            try:
+                await page.wait_for_load_state("load", timeout=5000)
+            except:
+                # Continue even if full load times out
+                pass
+
             # Wait for network to be idle for a short time
             try:
                 await page.wait_for_load_state("networkidle", timeout=2000)
             except:
                 # Continue even if network doesn't become fully idle
                 pass
+
+            # Additional manual sleep time if specified
+            if sleep_time > 0:
+                await page.wait_for_timeout(sleep_time)
+            else:
+                # Default small delay to allow initial animations to settle
+                await page.wait_for_timeout(500)
 
             # Wait for selectors if specified
             if selector_list:
