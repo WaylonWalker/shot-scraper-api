@@ -7,6 +7,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     imagemagick \
     webp \
+    # Add fonts with emoji support
+    fonts-noto-color-emoji \
     # Dependencies for Chromium
     ca-certificates \
     fonts-liberation \

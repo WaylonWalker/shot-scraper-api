@@ -1,3 +1,7 @@
+## 0.0.18
+
+- add emoji font support
+
 ## 0.0.17
 
 - fix presigned url set content type to image/webp not image/web
