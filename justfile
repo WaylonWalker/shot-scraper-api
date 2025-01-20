@@ -15,7 +15,7 @@ push:
     podman push registry.wayl.one/shot-scraper-api:$(hatch version)
     podman push registry.wayl.one/shot-scraper-api:latest
 run:
-    podman run -p 5000:5000 registry.wayl.one/shot-scraper-api
+    podman run --env-file .env -p 5050:5000 registry.wayl.one/shot-scraper-api
 
 create-ns:
     kubectl create ns shot && echo created ns shot || echo namespace shot already exists

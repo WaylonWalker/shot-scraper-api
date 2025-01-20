@@ -1,4 +1,8 @@
-## 0.0.15
+## 0.0.16
+
+- swap playwright out for the working pypeteer
+
+## 0.0.15 **broken**
 
 - remove broken minio import
 
@@ -8,15 +12,15 @@
 - remove minio from requirements
 - add CACHE_DIR config
 
-## 0.0.13
+## 0.0.13 **broken**
 
 - add an asycnio.sleep for animations to finish
 
-## 0.0.12
+## 0.0.12 **broken**
 
 - better wait for animations to finish
 
-## 0.0.11
+## 0.0.11 **broken**
 
 - fix s3 file upload
 

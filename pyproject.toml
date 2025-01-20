@@ -38,7 +38,7 @@ dependencies = [
   "pydantic-settings",
   "rich",
   "boto3",
-  "playwright",
+  "pyppeteer",
   "python-dotenv",
   "aiofiles",
   "textual",

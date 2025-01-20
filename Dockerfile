@@ -7,7 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     imagemagick \
     webp \
-    # Dependencies for Chromium and Playwright
+    # Dependencies for Chromium
     ca-certificates \
     fonts-liberation \
     libasound2 \
@@ -44,21 +44,6 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     wget \
     xdg-utils \
-    # Additional dependencies for Playwright
-    gstreamer1.0-libav \
-    libatomic1 \
-    libxslt1.1 \
-    libvpx7 \
-    libevent-2.1-7 \
-    libopus0 \
-    gstreamer1.0-plugins-base \
-    libharfbuzz-icu0 \
-    libenchant-2-2 \
-    libsecret-1-0 \
-    libhyphen0 \
-    libmanette-0.2-0 \
-    libnghttp2-14 \
-    x264 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -67,10 +52,7 @@ COPY shot_scraper_api/__about__.py /app/shot_scraper_api/__about__.py
 COPY README.md /app
 RUN pip3 install --no-cache-dir --root-user-action=ignore --upgrade pip wheel
 RUN pip3 install --no-cache-dir --root-user-action=ignore .
-
-# Install Playwright browser
-RUN playwright install chromium
-RUN playwright install-deps
+RUN pyppeteer-install
 
 # Copy application code
 COPY . /app
