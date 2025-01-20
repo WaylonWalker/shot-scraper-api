@@ -1,3 +1,7 @@
+## 0.0.17
+
+- fix presigned url set content type to image/webp not image/web
+
 ## 0.0.16
 
 - swap playwright out for the working pypeteer

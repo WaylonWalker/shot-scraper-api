@@ -138,7 +138,7 @@ class S3Client:
         try:
             url = self.generate_presigned_url(
                 object_name=filename,
-                content_type="image/web",
+                content_type="image/webp",
                 expiration=expires_in,
                 http_method="get",
                 download=False,
