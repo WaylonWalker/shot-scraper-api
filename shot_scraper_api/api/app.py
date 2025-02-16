@@ -174,46 +174,82 @@ async def get_shot(
         f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
     )
     if hx_request_header:
-        return templates.TemplateResponse(
-            "output.html",
-            {
-                "request": request,
-                "imgname": imgname,
+        print("HTMX request")
+        imgname = (
+            hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
+            + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
+        ).lower()
+
+        # Check if image exists
+        if config.s3_client.file_exists(imgname):
+            # Image is ready, return the image URL
+            return templates.TemplateResponse(
+                "image_status.html",
+                {
+                    "request": request,
+                    "image_ready": True,
+                    "image_url": f"/shot/?url={quote_plus(url)}&width={width}&height={height}&scaled_width={scaled_width}&scaled_height={scaled_height}&selectors={selectors}",
+                    "scaled_width": scaled_width,
+                    "scaled_height": scaled_height,
+                },
+            )
+        else:
+            # Image not ready, return loading template
+            output = "/tmp/" + imgname.replace(format, "png")
+            output_final = "/tmp/" + imgname
+            SHOT_QUEUE[imgname] = {
                 "url": url,
-                "height": height,
                 "width": width,
+                "height": height,
                 "scaled_height": scaled_height,
                 "scaled_width": scaled_width,
-                "selectors": selectors,
-            },
-        )
+                "selector_list": selector_list,
+                "output": output,
+                "output_final": output_final,
+                "format": format,
+            }
+            return templates.TemplateResponse(
+                "image_status.html",
+                {
+                    "request": request,
+                    "image_ready": False,
+                    "image_url": "",
+                    "scaled_width": scaled_width,
+                    "scaled_height": scaled_height,
+                },
+            )
+    else:
+        print("Non-HTMX request")
+        output = "/tmp/" + imgname.replace(format, "png")
+        output_final = "/tmp/" + imgname
 
-    output = "/tmp/" + imgname.replace(format, "png")
-    output_final = "/tmp/" + imgname
+        if config.s3_client.file_exists(imgname):
+            file = await config.s3_client.get_file(imgname)
 
-    if config.s3_client.file_exists(imgname):
-        file = await config.s3_client.get_file(imgname)
-        async def iterfile():
-            yield file
+            async def iterfile():
+                yield file
+
+            return StreamingResponse(
+                iterfile(),
+                media_type=f"image/{format}",
+            )
+
+        SHOT_QUEUE[imgname] = {
+            "url": url,
+            "width": width,
+            "height": height,
+            "scaled_height": scaled_height,
+            "scaled_width": scaled_width,
+            "selector_list": selector_list,
+            "output": output,
+            "output_final": output_final,
+            "format": format,
+        }
+
         return StreamingResponse(
             iterfile(),
             media_type=f"image/{format}",
         )
-
-    SHOT_QUEUE[imgname] = {
-        "url": url,
-        "width": width,
-        "height": height,
-        "scaled_height": scaled_height,
-        "scaled_width": scaled_width,
-        "selector_list": selector_list,
-        "output": output,
-        "output_final": output_final,
-        "format": format,
-    }
-
-    # return 404
-    return HTTPException(status_code=404, detail="Not Found, generating image")
 
     # Take screenshot
     screenshot_success = await take_screenshot(

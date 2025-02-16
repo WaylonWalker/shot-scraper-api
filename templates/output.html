@@ -3,11 +3,13 @@
 [![screenshot of {{url}}]({{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}})]({{url}})
 
 <code><span class="text-zinc-400"># html </span>
-&lt;a href="{{url}}"&gt;&lt;img class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="{{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}" alt="shot" height="{{scaled_height}}" width="{{scaled_width}}" /&gt;&lt;/a&gt;
+<div hx-get="/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}" 
+     hx-trigger="load"
+     hx-swap="outerHTML">
+</div>
 
 <span class="text-zinc-400"># curl</span>
-curl '{{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}' --output {{imgname}}
-    </code>
+curl '{{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}' -o screenshot.{{format}}</code>
 </pre>
 <img class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}" alt="shot"
     height="{{scaled_height}}" width="{{scaled_width}}" />
