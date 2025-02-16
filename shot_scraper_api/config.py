@@ -19,6 +19,8 @@ class Config(BaseSettings):
     docker_repo: Optional[str] = Field(None)
     max_file_size_mb: Optional[int] = Field(100)
     cache_dir: Optional[str] = Field("/cache/")
+    api_server_host: str = "0.0.0.0"
+    api_server_port: int = 8000
 
     class Config:
         env_file = ".env"
