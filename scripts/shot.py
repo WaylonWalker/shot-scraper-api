@@ -14,7 +14,8 @@
 
 import asyncio
 from pathlib import Path
-from pydantic import BaseModel
+from typing import Optional
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from pyppeteer import launch
 from shot_scraper_api.config import get_config
 import subprocess
@@ -33,23 +34,109 @@ class Screenshot(BaseModel):
     output_final: str
     selector_list: list[str] = []
     s3_key: str | None = None
+    scaled_width: Optional[int] = None
+    scaled_height: Optional[int] = None
+
+    @property
+    def needs_scaling(self) -> bool:
+        """Check if image needs to be scaled."""
+        return (
+            self.scaled_width is not None 
+            and self.scaled_height is not None
+            and (self.scaled_width != self.width or self.scaled_height != self.height)
+        )
+
+    @field_validator("scaled_width", "scaled_height", mode="before")
+    @classmethod
+    def set_scaled_dimensions(cls, v: Optional[int], info: ValidationInfo) -> Optional[int]:
+        """Set scaled dimensions if not provided, maintaining aspect ratio."""
+        values = info.data
+        if "width" not in values or "height" not in values:
+            return v
+
+        original_width = values["width"]
+        original_height = values["height"]
+
+        # If neither scaled dimension is provided, use original dimensions
+        if values.get("scaled_width") is None and values.get("scaled_height") is None:
+            if info.field_name == "scaled_width":
+                return original_width
+            return original_height
+
+        # If one scaled dimension is provided, calculate the other maintaining aspect ratio
+        if info.field_name == "scaled_width" and v is None and values.get("scaled_height"):
+            scaled_height = values["scaled_height"]
+            return int(original_width * (scaled_height / original_height))
+        elif info.field_name == "scaled_height" and v is None and values.get("scaled_width"):
+            scaled_width = values["scaled_width"]
+            return int(original_height * (scaled_width / original_width))
+
+        return v
+
+    @field_validator("scaled_width", "scaled_height")
+    @classmethod
+    def validate_scaled_dimensions(cls, v: Optional[int], info: ValidationInfo) -> Optional[int]:
+        """Ensure scaled dimensions maintain aspect ratio and fit within bounds."""
+        if v is None:
+            return v
+
+        values = info.data
+        original_width = values["width"]
+        original_height = values["height"]
+        original_ratio = original_width / original_height
+
+        # Get both scaled dimensions
+        scaled_width = v if info.field_name == "scaled_width" else values.get("scaled_width")
+        scaled_height = v if info.field_name == "scaled_height" else values.get("scaled_height")
+
+        if scaled_width and scaled_height:
+            scaled_ratio = scaled_width / scaled_height
+            if abs(original_ratio - scaled_ratio) > 0.01:  # Allow small rounding differences
+                # Adjust dimensions to maintain aspect ratio within bounds
+                if scaled_width / original_width < scaled_height / original_height:
+                    # Width is the constraining factor
+                    if info.field_name == "scaled_height":
+                        new_height = int(scaled_width / original_ratio)
+                        return new_height
+                else:
+                    # Height is the constraining factor
+                    if info.field_name == "scaled_width":
+                        new_width = int(scaled_height * original_ratio)
+                        return new_width
+
+        return v
 
 
 def process_image(screenshot: Screenshot) -> bool:
     """Process a single image with the appropriate conversion tool."""
     try:
+        start_time = time.monotonic()
+        
+        # Only resize if needed
+        if screenshot.needs_scaling:
+            typer.echo(f"Resizing to {screenshot.scaled_width}x{screenshot.scaled_height}")
+            # Use ImageMagick's resize to maintain aspect ratio and fit within bounds
+            # > means "scale down only if larger"
+            # < means "scale up only if smaller"
+            resize_cmd = [
+                "convert",
+                screenshot.output,
+                "-resize",
+                f"{screenshot.scaled_width}x{screenshot.scaled_height}>",  # Only scale down if larger
+                "-background", "none",  # Transparent background for padding
+                screenshot.output,
+            ]
+            subprocess.run(resize_cmd, check=True, capture_output=True)
+            resize_time = time.monotonic() - start_time
+            typer.echo(f"Resize time: {resize_time:.2f}s")
+            start_time = time.monotonic()
+
         if screenshot.output_final.endswith(".webp"):
-            # WebP optimization:
-            # -q 75: Good balance of quality and compression
-            # -m 6: Maximum compression effort
-            # -af: Enable auto-filter for better quality
-            # -sharp_yuv: Use sharp RGB->YUV conversion
+            # WebP optimization
             cmd = [
                 "cwebp",
-                "-q",
-                "75",
-                "-m",
-                "6",
+                "-q", "75",
+                "-m", "6",
                 "-af",
                 "-sharp_yuv",
                 screenshot.output,
@@ -57,38 +144,24 @@ def process_image(screenshot: Screenshot) -> bool:
                 screenshot.output_final,
             ]
         elif screenshot.output_final.endswith(".jpg"):
-            # JPEG optimization:
-            # -sampling-factor 4:2:0: Standard web chroma subsampling
-            # -strip: Remove metadata
-            # -interlace Plane: Progressive loading
-            # -quality 80: Good quality while maintaining compression
-            # -define jpeg:dct-method=float: Higher quality encoding
+            # JPEG optimization
             cmd = [
                 "convert",
                 screenshot.output,
-                "-sampling-factor",
-                "4:2:0",
+                "-sampling-factor", "4:2:0",
                 "-strip",
-                "-interlace",
-                "Plane",
-                "-quality",
-                "80",
-                "-define",
-                "jpeg:dct-method=float",
+                "-interlace", "Plane",
+                "-quality", "80",
+                "-define", "jpeg:dct-method=float",
                 screenshot.output_final,
             ]
         elif screenshot.output_final.endswith(".png"):
-            # PNG optimization:
-            # Using optipng for better compression
-            # -o2: Optimization level 2 (good balance of speed/compression)
-            # -strip all: Remove all metadata
+            # PNG optimization
             cmd = [
                 "optipng",
                 "-o2",
-                "-strip",
-                "all",
-                "-out",
-                screenshot.output_final,
+                "-strip", "all",
+                "-out", screenshot.output_final,
                 screenshot.output,
             ]
         elif screenshot.output != screenshot.output_final:
@@ -96,6 +169,8 @@ def process_image(screenshot: Screenshot) -> bool:
             cmd = ["cp", screenshot.output, screenshot.output_final]
 
         subprocess.run(cmd, check=True, capture_output=True)
+        convert_time = time.monotonic() - start_time
+        typer.echo(f"Convert time: {convert_time:.2f}s")
         return True
     except Exception as e:
         typer.echo(f"Failed to process image {screenshot.output}: {e}")
@@ -252,17 +327,38 @@ def capture_queue():
     # Convert queue items to Screenshot models
     screenshots = []
     for filename, item in queue.items():
-        screenshots.append(
-            Screenshot(
+        try:
+            # Extract dimensions, ensuring they are integers
+            width = int(item.get("width", 1200))
+            height = int(item.get("height", 600))
+            scaled_width = int(item.get("scaled_width", width))
+            scaled_height = int(item.get("scaled_height", height))
+
+            # Only set scaled dimensions if they're different from original
+            if scaled_width == width and scaled_height == height:
+                scaled_width = None
+                scaled_height = None
+
+            screenshot = Screenshot(
                 url=item["url"],
-                width=item["width"],
-                height=item["height"],
+                width=width,
+                height=height,
                 output=item["output"],
                 output_final=item["output_final"],
                 selector_list=item.get("selector_list", []),
-                s3_key=filename,  # Use the queue filename as the S3 key
+                s3_key=filename,
+                scaled_width=scaled_width,
+                scaled_height=scaled_height,
             )
-        )
+            screenshots.append(screenshot)
+            if screenshot.needs_scaling:
+                typer.echo(f"Will scale: {screenshot.width}x{screenshot.height} -> {screenshot.scaled_width}x{screenshot.scaled_height}")
+        except Exception as e:
+            typer.echo(f"Failed to create Screenshot for {filename}: {e}")
+
+    if not screenshots:
+        typer.echo("No valid screenshots to process")
+        return
 
     # Process all screenshots with a single browser instance
     asyncio.run(take_screenshots(screenshots))
