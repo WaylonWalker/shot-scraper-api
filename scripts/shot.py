@@ -209,6 +209,7 @@ async def take_screenshots(
     with ThreadPoolExecutor(max_workers=min(32, len(screenshots))) as executor:
         async def process_screenshot(screenshot: Screenshot):
             """Handles individual URL screenshot with specific settings."""
+            page = None
             try:
                 page = await browser.newPage()
 
@@ -228,7 +229,7 @@ async def take_screenshots(
                 for selector in screenshot.selector_list:
                     try:
                         await page.waitForSelector(selector, {"timeout": 5000})
-                    except:
+                    except Exception:
                         typer.echo(f"Selector {selector} not found")
 
                 # Take screenshot
@@ -240,7 +241,6 @@ async def take_screenshots(
                     }
                 )
                 screenshot_time = time.monotonic() - start_time - load_time
-                await page.close()
 
                 typer.echo(
                     f"Captured {screenshot.url} (Load time: {load_time:.2f}s, Screenshot time: {screenshot_time:.2f}s)"
@@ -249,6 +249,12 @@ async def take_screenshots(
             except Exception as e:
                 typer.echo(f"Failed to capture {screenshot.url}: {e}")
                 return None
+            finally:
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass  # Ignore cleanup errors
 
         # Process URLs in parallel with a limited number of concurrent tabs
         semaphore = asyncio.Semaphore(concurrency)
@@ -258,9 +264,14 @@ async def take_screenshots(
             async with semaphore:
                 return await process_screenshot(screenshot)
 
-        # Take all screenshots concurrently
-        captured = await asyncio.gather(*[sem_task(screenshot) for screenshot in screenshots])
-        await browser.close()
+        try:
+            # Take all screenshots concurrently
+            captured = await asyncio.gather(*[sem_task(screenshot) for screenshot in screenshots])
+        finally:
+            try:
+                await browser.close()
+            except Exception:
+                pass  # Ignore browser cleanup errors
 
         # Filter out failed screenshots
         successful_screenshots = [s for s in captured if s is not None]
