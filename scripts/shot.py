@@ -7,6 +7,8 @@
 #     "pydantic",
 #     "requests",
 #     "pillow",
+#     "boto3",
+#     "shot-scraper-api @ /home/waylon/git/shot-scraper-api"
 # ]
 # ///
 
@@ -14,6 +16,7 @@ import asyncio
 from pathlib import Path
 from pydantic import BaseModel
 from pyppeteer import launch
+from shot_scraper_api.config import get_config
 import subprocess
 import time
 import typer
@@ -28,6 +31,7 @@ class Screenshot(BaseModel):
     output: str
     output_final: str
     selector_list: list[str] = []
+    s3_key: str | None = None
 
 
 async def take_screenshots(
@@ -35,6 +39,10 @@ async def take_screenshots(
     concurrency: int = 60,
 ):
     """Capture screenshots of multiple URLs using multiple concurrent browser tabs."""
+    # Get config and S3 client
+    config = get_config()
+    s3_client = config.s3_client
+
     # Launch browser once and use it for all requests
     browser = await launch(
         args=[
@@ -141,6 +149,14 @@ async def take_screenshots(
                 cmd = ["cp", screenshot.output, screenshot.output_final]
                 subprocess.run(cmd, check=True)
 
+            # Upload to S3 if configured
+            if config.aws_bucket_name and screenshot.s3_key:
+                await s3_client.upload_file(
+                    filepath=screenshot.output_final,
+                    filename=screenshot.s3_key,
+                )
+                typer.echo(f"Uploaded to S3: {screenshot.s3_key}")
+
             typer.echo(
                 f"Saved screenshot: {screenshot.output_final} (Load time: {load_time:.2f} seconds, Screenshot time: {screenshot_time:.2f} seconds)"
             )
@@ -210,6 +226,7 @@ def capture_queue():
                 output=item["output"],
                 output_final=item["output_final"],
                 selector_list=item.get("selector_list", []),
+                s3_key=filename,  # Use the queue filename as the S3 key
             )
         )
 
