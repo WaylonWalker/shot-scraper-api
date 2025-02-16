@@ -20,6 +20,7 @@ from shot_scraper_api.config import get_config
 import subprocess
 import time
 import typer
+from concurrent.futures import ThreadPoolExecutor
 
 app = typer.Typer()
 
@@ -32,6 +33,83 @@ class Screenshot(BaseModel):
     output_final: str
     selector_list: list[str] = []
     s3_key: str | None = None
+
+
+def process_image(screenshot: Screenshot) -> bool:
+    """Process a single image with the appropriate conversion tool."""
+    try:
+        if screenshot.output_final.endswith(".webp"):
+            # WebP optimization:
+            # -q 75: Good balance of quality and compression
+            # -m 6: Maximum compression effort
+            # -af: Enable auto-filter for better quality
+            # -sharp_yuv: Use sharp RGB->YUV conversion
+            cmd = [
+                "cwebp",
+                "-q",
+                "75",
+                "-m",
+                "6",
+                "-af",
+                "-sharp_yuv",
+                screenshot.output,
+                "-o",
+                screenshot.output_final,
+            ]
+        elif screenshot.output_final.endswith(".jpg"):
+            # JPEG optimization:
+            # -sampling-factor 4:2:0: Standard web chroma subsampling
+            # -strip: Remove metadata
+            # -interlace Plane: Progressive loading
+            # -quality 80: Good quality while maintaining compression
+            # -define jpeg:dct-method=float: Higher quality encoding
+            cmd = [
+                "convert",
+                screenshot.output,
+                "-sampling-factor",
+                "4:2:0",
+                "-strip",
+                "-interlace",
+                "Plane",
+                "-quality",
+                "80",
+                "-define",
+                "jpeg:dct-method=float",
+                screenshot.output_final,
+            ]
+        elif screenshot.output_final.endswith(".png"):
+            # PNG optimization:
+            # Using optipng for better compression
+            # -o2: Optimization level 2 (good balance of speed/compression)
+            # -strip all: Remove all metadata
+            cmd = [
+                "optipng",
+                "-o2",
+                "-strip",
+                "all",
+                "-out",
+                screenshot.output_final,
+                screenshot.output,
+            ]
+        elif screenshot.output != screenshot.output_final:
+            # Fallback copy if formats match but paths differ
+            cmd = ["cp", screenshot.output, screenshot.output_final]
+
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except Exception as e:
+        typer.echo(f"Failed to process image {screenshot.output}: {e}")
+        return False
+
+
+async def process_images(screenshots: list[Screenshot], executor: ThreadPoolExecutor):
+    """Process multiple images concurrently using a thread pool."""
+    loop = asyncio.get_event_loop()
+    tasks = []
+    for screenshot in screenshots:
+        task = loop.run_in_executor(executor, process_image, screenshot)
+        tasks.append(task)
+    return await asyncio.gather(*tasks)
 
 
 async def take_screenshots(
@@ -52,127 +130,83 @@ async def take_screenshots(
         headless=True,
     )
 
-    async def process_screenshot(screenshot: Screenshot):
-        """Handles individual URL screenshot with specific settings."""
-        try:
-            page = await browser.newPage()
+    # Create a thread pool for image processing
+    with ThreadPoolExecutor(max_workers=min(32, len(screenshots))) as executor:
+        async def process_screenshot(screenshot: Screenshot):
+            """Handles individual URL screenshot with specific settings."""
+            try:
+                page = await browser.newPage()
 
-            await page.setViewport(
-                {"width": screenshot.width, "height": screenshot.height}
-            )
-            await page.setCacheEnabled(True)
+                await page.setViewport(
+                    {"width": screenshot.width, "height": screenshot.height}
+                )
+                await page.setCacheEnabled(True)
 
-            start_time = time.monotonic()
-            await page.goto(
-                screenshot.url, {"waitUntil": "domcontentloaded", "timeout": 15000}
-            )
-            await page.evaluate("document.fonts.ready")
-            load_time = time.monotonic() - start_time
+                start_time = time.monotonic()
+                await page.goto(
+                    screenshot.url, {"waitUntil": "domcontentloaded", "timeout": 15000}
+                )
+                await page.evaluate("document.fonts.ready")
+                load_time = time.monotonic() - start_time
 
-            # Wait for selectors if specified
-            for selector in screenshot.selector_list:
-                try:
-                    await page.waitForSelector(selector, {"timeout": 5000})
-                except:
-                    typer.echo(f"Selector {selector} not found")
+                # Wait for selectors if specified
+                for selector in screenshot.selector_list:
+                    try:
+                        await page.waitForSelector(selector, {"timeout": 5000})
+                    except:
+                        typer.echo(f"Selector {selector} not found")
 
-            # Take screenshot
-            await page.screenshot(
-                {
-                    "path": screenshot.output,
-                    "fullPage": False,
-                    "type": "png",
-                }
-            )
-            screenshot_time = time.monotonic() - start_time - load_time
-            await page.close()
+                # Take screenshot
+                await page.screenshot(
+                    {
+                        "path": screenshot.output,
+                        "fullPage": False,
+                        "type": "png",
+                    }
+                )
+                screenshot_time = time.monotonic() - start_time - load_time
+                await page.close()
 
-            # Convert using appropriate tool based on format
-            if screenshot.output_final.endswith(".webp"):
-                # WebP optimization:
-                # -q 75: Good balance of quality and compression
-                # -m 6: Maximum compression effort
-                # -af: Enable auto-filter for better quality
-                # -sharp_yuv: Use sharp RGB->YUV conversion
-                cmd = [
-                    "cwebp",
-                    "-q",
-                    "75",
-                    "-m",
-                    "6",
-                    "-af",
-                    "-sharp_yuv",
-                    screenshot.output,
-                    "-o",
-                    screenshot.output_final,
-                ]
-                subprocess.run(cmd, check=True)
-            elif screenshot.output_final.endswith(".jpg"):
-                # JPEG optimization:
-                # -sampling-factor 4:2:0: Standard web chroma subsampling
-                # -strip: Remove metadata
-                # -interlace Plane: Progressive loading
-                # -quality 80: Good quality while maintaining compression
-                # -define jpeg:dct-method=float: Higher quality encoding
-                cmd = [
-                    "convert",
-                    screenshot.output,
-                    "-sampling-factor",
-                    "4:2:0",
-                    "-strip",
-                    "-interlace",
-                    "Plane",
-                    "-quality",
-                    "80",
-                    "-define",
-                    "jpeg:dct-method=float",
-                    screenshot.output_final,
-                ]
-                subprocess.run(cmd, check=True)
-            elif screenshot.output_final.endswith(".png"):
-                # PNG optimization:
-                # Using optipng for better compression
-                # -o2: Optimization level 2 (good balance of speed/compression)
-                # -strip all: Remove all metadata
-                cmd = [
-                    "optipng",
-                    "-o2",
-                    "-strip",
-                    "all",
-                    "-out",
-                    screenshot.output_final,
-                    screenshot.output,
-                ]
-                subprocess.run(cmd, check=True)
-            elif screenshot.output != screenshot.output_final:
-                # Fallback copy if formats match but paths differ
-                cmd = ["cp", screenshot.output, screenshot.output_final]
-                subprocess.run(cmd, check=True)
+                typer.echo(
+                    f"Captured {screenshot.url} (Load time: {load_time:.2f}s, Screenshot time: {screenshot_time:.2f}s)"
+                )
+                return screenshot
+            except Exception as e:
+                typer.echo(f"Failed to capture {screenshot.url}: {e}")
+                return None
 
-            # Upload to S3 if configured
-            if config.aws_bucket_name and screenshot.s3_key:
-                await s3_client.upload_file(
+        # Process URLs in parallel with a limited number of concurrent tabs
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def sem_task(screenshot):
+            """Ensures tasks run within concurrency limits."""
+            async with semaphore:
+                return await process_screenshot(screenshot)
+
+        # Take all screenshots concurrently
+        captured = await asyncio.gather(*[sem_task(screenshot) for screenshot in screenshots])
+        await browser.close()
+
+        # Filter out failed screenshots
+        successful_screenshots = [s for s in captured if s is not None]
+
+        # Process all images concurrently
+        typer.echo("Processing images...")
+        processed = await process_images(successful_screenshots, executor)
+
+        # Upload processed images to S3 concurrently
+        typer.echo("Uploading to S3...")
+        upload_tasks = []
+        for screenshot, was_processed in zip(successful_screenshots, processed):
+            if was_processed and config.aws_bucket_name and screenshot.s3_key:
+                task = s3_client.upload_file(
                     filepath=screenshot.output_final,
                     filename=screenshot.s3_key,
                 )
-                typer.echo(f"Uploaded to S3: {screenshot.s3_key}")
-
-            typer.echo(
-                f"Saved screenshot: {screenshot.output_final} (Load time: {load_time:.2f} seconds, Screenshot time: {screenshot_time:.2f} seconds)"
-            )
-        except Exception as e:
-            typer.echo(f"Failed to capture {screenshot.url}: {e}")
-
-    # Process URLs in parallel with a limited number of concurrent tabs
-    semaphore = asyncio.Semaphore(concurrency)
-
-    async def sem_task(screenshot):
-        """Ensures tasks run within concurrency limits."""
-        async with semaphore:
-            await process_screenshot(screenshot)
-
-    await asyncio.gather(*[sem_task(screenshot) for screenshot in screenshots])
-    await browser.close()
+                upload_tasks.append(task)
+        
+        if upload_tasks:
+            await asyncio.gather(*upload_tasks)
 
 
 @app.command()
