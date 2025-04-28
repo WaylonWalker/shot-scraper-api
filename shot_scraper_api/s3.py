@@ -1,5 +1,4 @@
 import boto3
-from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 from diskcache import Cache
 import io
@@ -10,23 +9,24 @@ from pathlib import Path
 
 class S3Client:
     def __init__(self, config):
-        # Configure boto3 session with profile if specified
         session = (
             boto3.Session(profile_name=config.aws_profile)
             if config.aws_profile
             else boto3.Session()
         )
 
-        # Configure client
-        boto_config = BotoConfig(retries=dict(max_attempts=3))
+        # Configure client with s3v4 signature and path-style addressing
+        boto_config = BotoConfig(
+            retries=dict(max_attempts=3),
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+        )
 
-        # Client args
         client_args = {
             "service_name": "s3",
             "config": boto_config,
         }
 
-        # Add endpoint URL if specified (for MinIO, etc.)
         if config.aws_endpoint_url:
             client_args.update(
                 {
@@ -37,11 +37,8 @@ class S3Client:
                 }
             )
 
-        # Create S3 client
         self.s3 = session.client(**client_args)
         self.config = config
-
-        # Ensure bucket exists
         self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self):
