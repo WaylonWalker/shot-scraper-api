@@ -1,4 +1,5 @@
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 from diskcache import Cache
 import io
