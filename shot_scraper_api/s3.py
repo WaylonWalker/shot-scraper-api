@@ -213,54 +213,44 @@ class S3Client:
         http_method: str = "put",
         download: bool = False,
     ) -> str:
-        """Generate a presigned URL for uploading or downloading a file.
-
-        Args:
-            object_name: The name of the object in S3
-            content_type: The Content-Type of the object (required for PUT requests)
-            expiration: URL expiration time in seconds (default 1 hour)
-            http_method: The HTTP method to allow ("put" for uploads, "get" for downloads)
-            download: If True, add Content-Disposition header for download
-
-        Returns:
-            str: Presigned URL
-        """
-
-        cache_key = (
-            f"{self.config.aws_bucket_name}:{object_name}:{http_method}:{download}"
-        )
-        with Cache(Path(self.config.cache_dir) / "s3") as cache:
-            if cache.get(cache_key):
-                url = cache.get(object_name)
-                if url is not None:
-                    return url
-
+        """Generate a presigned URL for uploading or downloading a file."""
         try:
             params = {
                 "Bucket": self.config.aws_bucket_name,
                 "Key": object_name,
             }
 
-            # Add Content-Type for PUT requests
+            # Add content type or response headers based on HTTP method
             if http_method.lower() == "put" and content_type:
                 params["ContentType"] = content_type
-
-            # Add response-content headers for GET requests
-            if http_method.lower() == "get":
-                params["ResponseContentType"] = content_type
-                params["ResponseContentDisposition"] = "inline"
-                params["ResponseCacheControl"] = (
-                    "public, max-age=31536000, stale-while-revalidate=2592000"
+            elif http_method.lower() == "get":
+                params["ResponseContentType"] = (
+                    content_type or "application/octet-stream"
                 )
+                if download:
+                    params["ResponseContentDisposition"] = "attachment"
 
+            # MinIO requires the region in the signature to be "us-east-1"
+            if self.config.aws_endpoint_url:
+                region = self.config.aws_region or "us-east-1"
+                self.s3.meta.events.register(
+                    "choose-signer.s3.*", lambda **kwargs: "s3v4"
+                )
+                self.s3.meta.client._client_config.region_name = region
+
+            # Generate the URL
             url = self.s3.generate_presigned_url(
                 ClientMethod=f"{http_method}_object",
                 Params=params,
                 ExpiresIn=expiration,
                 HttpMethod=http_method.upper(),
             )
-            with Cache("s3") as cache:
+
+            # Cache the URL (optional)
+            with Cache(Path(self.config.cache_dir) / "s3") as cache:
+                cache_key = f"{self.config.aws_bucket_name}:{object_name}:{http_method}:{download}"
                 cache.set(cache_key, url, expire=max(60, expiration - 3600))
+
             return url
         except ClientError as e:
             logging.error(f"Error generating presigned URL: {e}")
