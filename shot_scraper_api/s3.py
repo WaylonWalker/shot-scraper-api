@@ -1,11 +1,9 @@
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
-from diskcache import Cache
 import io
 import logging
 import os
-from pathlib import Path
 
 
 class S3Client:
@@ -122,12 +120,20 @@ class S3Client:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
 
     async def get_file(self, filename: str):
-        """Get a file from S3"""
+        """Get a file from S3 as a streaming response"""
         try:
             response = self.s3.get_object(
                 Bucket=self.config.aws_bucket_name, Key=filename
             )
-            return response["Body"].read()
+            async def stream_response():
+                chunk_size = 8192  # 8KB chunks
+                body = response["Body"]
+                while True:
+                    chunk = body.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+            return stream_response()
         except ClientError as e:
             raise Exception(f"Failed to get file from S3: {str(e)}")
 
@@ -236,20 +242,21 @@ class S3Client:
                 self.s3.meta.events.register(
                     "choose-signer.s3.*", lambda **kwargs: "s3v4"
                 )
-                self.s3.meta.client._client_config.region_name = region
+                # self.s3.meta.client._client_config.region_name = region
 
             # Generate the URL
             url = self.s3.generate_presigned_url(
                 ClientMethod=f"{http_method}_object",
                 Params=params,
-                ExpiresIn=expiration,
+                # ExpiresIn=expiration,
+                ExpiresIn=3600,
                 HttpMethod=http_method.upper(),
             )
 
             # Cache the URL (optional)
-            with Cache(Path(self.config.cache_dir) / "s3") as cache:
-                cache_key = f"{self.config.aws_bucket_name}:{object_name}:{http_method}:{download}"
-                cache.set(cache_key, url, expire=max(60, expiration - 3600))
+            # with Cache(Path(self.config.cache_dir) / "s3") as cache:
+            #     cache_key = f"{self.config.aws_bucket_name}:{object_name}:{http_method}:{download}"
+            #     cache.set(cache_key, url, expire=max(60, expiration - 3600))
 
             return url
         except ClientError as e:

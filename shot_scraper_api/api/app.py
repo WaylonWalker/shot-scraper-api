@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pyppeteer import launch
@@ -33,7 +33,9 @@ async def shutdown_event():
     pass
 
 
-async def take_screenshot(url: str, width: int, height: int, selector_list: list, output: str):
+async def take_screenshot(
+    url: str, width: int, height: int, selector_list: list, output: str
+):
     """Take a screenshot of a webpage"""
     try:
         # Launch browser
@@ -183,17 +185,14 @@ async def get_shot(
     output_final = "/tmp/" + imgname
 
     if config.s3_client.file_exists(imgname):
-        print(f"getting presigned url for {imgname} from minio")
+        # print(f"getting presigned url for {imgname} from minio")
         # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
-        # print("streaming from minio")
+        imgdata = await config.s3_client.get_file(imgname)
+        print("streaming from minio")
 
-        url = await config.s3_client.get_file_url(imgname)
-
-        # url = "https://minio.wayl.one/shots-dev/8677021b0cb2a77677d6cd1da039623f-800x450-800x450.webp?AWSAccessKeyId=DSg2xoicDrBGbJoLrCuj&Signature=%2F3DVDvDDxL83QKn7erZ%2BfD8%2FIb4%3D&Expires=1737057467"
-        print(f"got presigned url: {url}")
-        return RedirectResponse(
-            url=url,
-            status_code=307,  # Temporary redirect
+        return StreamingResponse(
+            imgdata,
+            media_type=f"image/{format}",
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Content-Type": f"image/{format}",
@@ -202,8 +201,25 @@ async def get_shot(
             },
         )
 
+        # url = await config.s3_client.get_file_url(imgname)
+        #
+        # # url = "https://minio.wayl.one/shots-dev/8677021b0cb2a77677d6cd1da039623f-800x450-800x450.webp?AWSAccessKeyId=DSg2xoicDrBGbJoLrCuj&Signature=%2F3DVDvDDxL83QKn7erZ%2BfD8%2FIb4%3D&Expires=1737057467"
+        # print(f"got presigned url: {url}")
+        # return RedirectResponse(
+        #     url=url,
+        #     status_code=307,  # Temporary redirect
+        #     headers={
+        #         "Cache-Control": "public, max-age=86400",
+        #         "Content-Type": f"image/{format}",
+        #         "Access-Control-Allow-Origin": "*",
+        #         "Cross-Origin-Resource-Policy": "cross-origin",
+        #     },
+        # )
+
     # Take screenshot
-    screenshot_success = await take_screenshot(url, width, height, selector_list, output)
+    screenshot_success = await take_screenshot(
+        url, width, height, selector_list, output
+    )
     if not screenshot_success:
         raise HTTPException(status_code=500, detail="Failed to take screenshot")
 
@@ -266,21 +282,11 @@ async def get_shot(
         # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
         # print("streaming from minio")
 
-    url = await config.s3_client.get_file_url(imgname)
-    print(f"got presigned url: {url}")
-    return RedirectResponse(
-        url=url,
-        status_code=307,  # Temporary redirect
-                headers={
-                    "Cache-Control": "public, max-age=86400",
-                    "Content-Type": f"image/{format}",
-                    "Access-Control-Allow-Origin": "*",
-                    "Cross-Origin-Resource-Policy": "cross-origin",
-                },
-            )
-    # return StreamingResponse(
-    #     content=imgdata,
-    #     media_type=f"image/{format}",
+    # url = await config.s3_client.get_file_url(imgname)
+    # print(f"got presigned url: {url}")
+    # return RedirectResponse(
+    #     url=url,
+    #     status_code=307,  # Temporary redirect
     #     headers={
     #         "Cache-Control": "public, max-age=86400",
     #         "Content-Type": f"image/{format}",
@@ -288,3 +294,13 @@ async def get_shot(
     #         "Cross-Origin-Resource-Policy": "cross-origin",
     #     },
     # )
+    return StreamingResponse(
+        content=imgdata,
+        media_type=f"image/{format}",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Content-Type": f"image/{format}",
+            "Access-Control-Allow-Origin": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+    )
