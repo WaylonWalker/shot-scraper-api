@@ -11,14 +11,82 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pyppeteer import launch
+import pydantic
+import uuid
+from pydantic import BaseModel, field_validator, ValidationInfo
 
 from shot_scraper_api.config import config
 from shot_scraper_api.console import console
+
+import redis.asyncio as aioredis
+
+redis = aioredis.from_url(
+    "redis://localhost:6379", encoding="utf-8", decode_responses=True
+)
 
 
 app = FastAPI()
 
 SHOT_QUEUE = {}
+
+
+class Screenshot(BaseModel):
+    job_id: uuid.UUID = pydantic.Field(default_factory=uuid.uuid4)
+    url: str
+    width: int
+    height: int
+    output: str
+    output_final: str
+    selector_list: list[str] = []
+    s3_key: str | None = None
+    scaled_width: Optional[int] = None
+    scaled_height: Optional[int] = None
+
+    @property
+    def needs_scaling(self) -> bool:
+        """Check if image needs to be scaled."""
+        return (
+            self.scaled_width is not None
+            and self.scaled_height is not None
+            and (self.scaled_width != self.width or self.scaled_height != self.height)
+        )
+
+    @field_validator("scaled_width", "scaled_height", mode="before")
+    @classmethod
+    def set_scaled_dimensions(
+        cls, v: Optional[int], info: ValidationInfo
+    ) -> Optional[int]:
+        """Set scaled dimensions if not provided, maintaining aspect ratio."""
+        values = info.data
+        if "width" not in values or "height" not in values:
+            return v
+
+        original_width = values["width"]
+        original_height = values["height"]
+
+        # If neither scaled dimension is provided, use original dimensions
+        if values.get("scaled_width") is None and values.get("scaled_height") is None:
+            if info.field_name == "scaled_width":
+                return original_width
+            return original_height
+
+        # If one scaled dimension is provided, calculate the other maintaining aspect ratio
+        if (
+            info.field_name == "scaled_width"
+            and v is None
+            and values.get("scaled_height")
+        ):
+            scaled_height = values["scaled_height"]
+            return int(original_width * (scaled_height / original_height))
+        elif (
+            info.field_name == "scaled_height"
+            and v is None
+            and values.get("scaled_width")
+        ):
+            scaled_width = values["scaled_width"]
+            return int(original_height * (scaled_width / original_width))
+
+        return v
 
 
 @app.on_event("startup")
@@ -99,9 +167,21 @@ if config.env == "dev":
 templates.env.filters["quote_plus"] = lambda u: quote_plus(str(u))
 
 
+@app.get("/raw_queue")
+async def get_queue():
+    # return SHOT_QUEUE
+    raw_jobs = await redis.lrange("job_queue", 0, -1)
+    return {"pending_jobs": raw_jobs}
+    # parse each JSON blob into a dict
+
+
 @app.get("/queue")
 async def get_queue():
-    return SHOT_QUEUE
+    import json
+
+    raw_jobs = await redis.lrange("job_queue", 0, -1)
+    jobs = [Screenshot.model_validate(json.loads(job)) for job in raw_jobs]
+    return {"pending_jobs": jobs}
 
 
 @app.get("/")
@@ -147,6 +227,23 @@ async def get_shot(
     scaled_width: Optional[int | str] = None,
     selectors: Optional[str] = None,
 ):
+    scaled_height = int(scaled_height) if scaled_height else height
+    scaled_width = int(scaled_width) if scaled_width else width
+    output: Path = Path("screenshots")
+    safe_filename = url.replace("https://", "").replace("http://", "").replace("/", "_")
+    screenshot = Screenshot(
+        url=url,
+        width=width,
+        height=height,
+        scaled_width=scaled_width,
+        scaled_height=scaled_height,
+        selector_list=selectors.split(",") if selectors else [],
+        output=str(output / f"{safe_filename}.png"),
+        output_final=str(output / f"{safe_filename}.png"),
+    )
+
+    await redis.rpush("job_queue", screenshot.model_dump_json())
+    return {"job_id": screenshot.job_id}
     # Get format from filename extension
     ext = filename.split(".")[-1].lower() if "." in filename else "webp"
     if ext not in ["webp", "png", "jpg", "jpeg"]:
@@ -318,7 +415,6 @@ async def get_shot(
         # print("streaming from minio")
 
     url = await config.s3_client.get_file_url(imgname)
-    print(f"got presigned url: {url}")
     return RedirectResponse(
         url=url,
         status_code=307,  # Temporary redirect

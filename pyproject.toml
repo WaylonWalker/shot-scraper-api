@@ -46,6 +46,8 @@ dependencies = [
   "typer",
   "uvicorn[standard]",
   "diskcache",
+  "aioredis>=2.0.1",
+  "redis>=5.0.8",
 ]
 dynamic = ["version"]
 
