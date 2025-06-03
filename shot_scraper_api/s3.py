@@ -38,7 +38,7 @@ class S3Client:
 
         self.s3 = session.client(**client_args)
         self.config = config
-        self._ensure_bucket_exists()
+        # self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self):
         """Ensure the configured bucket exists, create if it doesn't"""
@@ -125,6 +125,7 @@ class S3Client:
             response = self.s3.get_object(
                 Bucket=self.config.aws_bucket_name, Key=filename
             )
+
             async def stream_response():
                 chunk_size = 8192  # 8KB chunks
                 body = response["Body"]
@@ -133,6 +134,7 @@ class S3Client:
                     if not chunk:
                         break
                     yield chunk
+
             return stream_response()
         except ClientError as e:
             raise Exception(f"Failed to get file from S3: {str(e)}")
