@@ -279,7 +279,7 @@ async def get_shot(
         #     output_final,
         # )
 
-    imgdata = config.minio_client.get_object(config.bucket_name, imgname)
+    imgdata = await config.s3_client.get_file(imgname)
     print("streaming from minio")
 
     # url = await config.s3_client.get_file_url(imgname)
