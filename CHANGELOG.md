@@ -1,3 +1,7 @@
+## 0.0.26
+
+- fix: browser not closing on failure
+
 ## 0.0.18
 
 - add emoji font support
