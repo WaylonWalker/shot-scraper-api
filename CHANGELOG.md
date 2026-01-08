@@ -1,3 +1,12 @@
+## 0.0.28
+
+- fix: signal desktop preview fails due to missing HEAD request support
+- feat: support HEAD requests to /shot/
+
+## 0.0.27
+
+- feat: support `?format=jpg`
+
 ## 0.0.26
 
 - fix: browser not closing on failure

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote_plus
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -64,170 +64,28 @@ async def take_screenshot(
         return False
 
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
-
-templates = Jinja2Templates(directory="templates")
-
-
-if config.env == "dev":
-    import arel
-
-    hot_reload = arel.HotReload(
-        paths=[
-            arel.Path("static"),
-            arel.Path("templates"),
-            arel.Path("shot_scraper_api"),
-        ],
-    )
-    app.add_websocket_route("/hot-reload", route=hot_reload, name="hot-reload")
-    app.add_event_handler("startup", hot_reload.startup)
-    app.add_event_handler("shutdown", hot_reload.shutdown)
-    templates.env.globals["DEBUG"] = True
-    templates.env.globals["hot_reload"] = hot_reload
-
-templates.env.filters["quote_plus"] = lambda u: quote_plus(str(u))
-
-
-@app.get("/")
-def get(request: Request):
-    return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
-            "env": os.environ,
-        },
-    )
-
-
-@app.get("/favicon.ico", response_class=FileResponse)
-async def get_favicon(request: Request):
-    output = "static/8bitcc.ico"
-    return FileResponse(output)
-
-
-@app.get(
-    "/shot/",
-    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
-)
-@app.get(
-    "/shot",
-    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
-)
-@app.get(
-    "/shot/{filename}",
-    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
-)
-@app.get(
-    "/shot/{filename}/",
-    # responses={200: {"content": {"image/webp": {}, "image/png": {}, "image/jpeg": {}}}},
-)
-async def get_shot(
-    request: Request,
+async def generate_image_data(
     url: str,
-    filename: Optional[str] = "screenshot.webp",
-    height: Optional[int] = 450,
-    width: Optional[int] = 800,
-    scaled_height: Optional[int | str] = None,
-    scaled_width: Optional[int | str] = None,
-    selectors: Optional[str] = None,
-    format: Optional[str] = None,
+    width: int,
+    height: int,
+    selector_list: list,
+    format: str,
+    scaled_width: int,
+    scaled_height: int,
 ):
-    # Determine format from query parameter or filename extension
-    if format:
-        format = format.lower()
-        if format not in ["webp", "png", "jpg", "jpeg"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
-            )
-    else:
-        ext = (
-            filename.split(".")[-1].lower() if filename and "." in filename else "webp"
-        )
-        if ext not in ["webp", "png", "jpg", "jpeg"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
-            )
-        format = "jpg" if ext == "jpeg" else ext
-
-    scaled_height = int(scaled_height) if scaled_height else height
-    scaled_width = int(scaled_width) if scaled_width else width
-
-    # Ensure width and height are not None for take_screenshot
-    width = width or 800
-    height = height or 450
-    selector_list = selectors.split(",") if selectors else []
-
-    if not url.startswith("http"):
-        raise HTTPException(status_code=404, detail="url is not a url")
-
-    hx_request_header = request.headers.get("hx-request")
+    """Generate image and return file path and format"""
+    # Generate unique filename
     imgname = (
         hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
         + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
     ).lower()
-    print(
-        f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
-    )
-    if hx_request_header:
-        return templates.TemplateResponse(
-            "output.html",
-            {
-                "request": request,
-                "imgname": imgname,
-                "url": url,
-                "height": height,
-                "width": width,
-                "scaled_height": scaled_height,
-                "scaled_width": scaled_width,
-                "selectors": selectors,
-            },
-        )
 
     output = "/tmp/" + imgname.replace(format, "png")
     output_final = "/tmp/" + imgname
 
+    # Check if exists in S3
     if config.s3_client.file_exists(imgname):
-        # print(f"getting presigned url for {imgname} from minio")
-        # imgdata = config.minio_client.get_object(config.bucket_name, imgname)
-        imgdata = await config.s3_client.get_file(imgname)
-        print("streaming from minio")
-
-        return StreamingResponse(
-            imgdata,
-            media_type=f"image/{format}",
-            headers={
-                "Cache-Control": "public, max-age=86400",
-                "Content-Type": f"image/{format}",
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-            },
-        )
-
-        # url = await config.s3_client.get_file_url(imgname)
-        #
-        # # url = "https://minio.wayl.one/shots-dev/8677021b0cb2a77677d6cd1da039623f-800x450-800x450.webp?AWSAccessKeyId=DSg2xoicDrBGbJoLrCuj&Signature=%2F3DVDvDDxL83QKn7erZ%2BfD8%2FIb4%3D&Expires=1737057467"
-        # print(f"got presigned url: {url}")
-        # return RedirectResponse(
-        #     url=url,
-        #     status_code=307,  # Temporary redirect
-        #     headers={
-        #         "Cache-Control": "public, max-age=86400",
-        #         "Content-Type": f"image/{format}",
-        #         "Access-Control-Allow-Origin": "*",
-        #         "Cross-Origin-Resource-Policy": "cross-origin",
-        #     },
-        # )
+        return imgname, output_final, True  # exists in S3
 
     # Take screenshot
     screenshot_success = await take_screenshot(
@@ -283,30 +141,167 @@ async def get_shot(
         console.log(stdout.decode())
         console.log(stderr.decode())
 
+    # Upload to S3
     if Path(output_final).exists():
         print("putting", output_final, imgname)
         await config.s3_client.upload_file(output_final, imgname)
-        # config.minio_client.fput_object(
-        #     config.bucket_name,
-        #     imgname,
-        #     output_final,
-        # )
 
+    return imgname, output_final, False  # newly created
+
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+templates = Jinja2Templates(directory="templates")
+
+
+if config.env == "dev":
+    import arel
+
+    hot_reload = arel.HotReload(
+        paths=[
+            arel.Path("static"),
+            arel.Path("templates"),
+            arel.Path("shot_scraper_api"),
+        ],
+    )
+    app.add_websocket_route("/hot-reload", route=hot_reload, name="hot-reload")
+    app.add_event_handler("startup", hot_reload.startup)
+    app.add_event_handler("shutdown", hot_reload.shutdown)
+    templates.env.globals["DEBUG"] = True
+    templates.env.globals["hot_reload"] = hot_reload
+
+templates.env.filters["quote_plus"] = lambda u: quote_plus(str(u))
+
+
+@app.get("/")
+def get(request: Request):
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "env": os.environ,
+        },
+    )
+
+
+@app.get("/favicon.ico", response_class=FileResponse)
+async def get_favicon(request: Request):
+    output = "static/8bitcc.ico"
+    return FileResponse(output)
+
+
+@app.api_route("/shot/", methods=["GET", "HEAD"])
+@app.api_route("/shot", methods=["GET", "HEAD"])
+@app.api_route("/shot/{filename}", methods=["GET", "HEAD"])
+@app.api_route("/shot/{filename}/", methods=["GET", "HEAD"])
+async def get_shot(
+    request: Request,
+    url: str,
+    filename: Optional[str] = "screenshot.webp",
+    height: Optional[int] = 450,
+    width: Optional[int] = 800,
+    scaled_height: Optional[int | str] = None,
+    scaled_width: Optional[int | str] = None,
+    selectors: Optional[str] = None,
+    format: Optional[str] = None,
+):
+    # Determine format from query parameter or filename extension
+    if format:
+        format = format.lower()
+        if format not in ["webp", "png", "jpg", "jpeg"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+            )
+    else:
+        ext = (
+            filename.split(".")[-1].lower() if filename and "." in filename else "webp"
+        )
+        if ext not in ["webp", "png", "jpg", "jpeg"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+            )
+        format = "jpg" if ext == "jpeg" else ext
+
+    scaled_height = int(scaled_height) if scaled_height else height
+    scaled_width = int(scaled_width) if scaled_width else width
+
+    # Ensure width and height are not None for take_screenshot
+    width = width or 800
+    height = height or 450
+    selector_list = selectors.split(",") if selectors else []
+
+    # Ensure scaled dimensions are integers (not None)
+    scaled_height = int(scaled_height) if scaled_height else height
+    scaled_width = int(scaled_width) if scaled_width else width
+
+    if not url.startswith("http"):
+        raise HTTPException(status_code=404, detail="url is not a url")
+
+    # Handle HTMX requests (only for GET)
+    hx_request_header = request.headers.get("hx-request")
+    if hx_request_header and request.method == "GET":
+        imgname = (
+            hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
+            + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
+        ).lower()
+        print(
+            f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
+        )
+        return templates.TemplateResponse(
+            "output.html",
+            {
+                "request": request,
+                "imgname": imgname,
+                "url": url,
+                "height": height,
+                "width": width,
+                "scaled_height": scaled_height,
+                "scaled_width": scaled_width,
+                "selectors": selectors,
+            },
+        )
+
+    # Generate or get image data
+    imgname, output_path, exists_in_s3 = await generate_image_data(
+        url, width, height, selector_list, format, scaled_width, scaled_height
+    )
+
+    # Get image data from S3
     imgdata = await config.s3_client.get_file(imgname)
     print("streaming from minio")
 
-    # url = await config.s3_client.get_file_url(imgname)
-    # print(f"got presigned url: {url}")
-    # return RedirectResponse(
-    #     url=url,
-    #     status_code=307,  # Temporary redirect
-    #     headers={
-    #         "Cache-Control": "public, max-age=86400",
-    #         "Content-Type": f"image/{format}",
-    #         "Access-Control-Allow-Origin": "*",
-    #         "Cross-Origin-Resource-Policy": "cross-origin",
-    #     },
-    # )
+    # Handle HEAD requests - read all data to determine content-length
+    if request.method == "HEAD":
+        # Read all chunks to calculate total size
+        chunks = []
+        total_size = 0
+        async for chunk in imgdata:
+            chunks.append(chunk)
+            total_size += len(chunk)
+
+        # Create headers for HEAD response
+        headers = {
+            "Cache-Control": "public, max-age=86400",
+            "Content-Type": f"image/{format}",
+            "Access-Control-Allow-Origin": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+            "Content-Length": str(total_size),
+        }
+
+        return Response(headers=headers, status_code=200)
+
+    # For GET requests, stream the image data
     return StreamingResponse(
         content=imgdata,
         media_type=f"image/{format}",
