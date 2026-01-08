@@ -6,6 +6,14 @@ from typing import Optional
 
 from shot_scraper_api.s3 import S3Client
 
+from pydantic import BaseModel
+
+def redact(value: str | None, keep: int = 4) -> str | None:
+    if not value:
+        return value
+    return value[:keep] + "*" * (len(value) - keep)
+
+
 
 class Config(BaseSettings):
     # Base Paths
@@ -49,12 +57,26 @@ class Config(BaseSettings):
         return Console()
 
 
+class SafeConfig(Config):
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(
+            env=config.env,
+            aws_access_key_id=redact(config.aws_access_key_id),
+            aws_secret_access_key=redact(config.aws_secret_access_key),
+            aws_endpoint_url=config.aws_endpoint_url,
+            aws_bucket_name=config.aws_bucket_name,
+            cache_dir=config.cache_dir,
+        )
+
 @lru_cache()
 def get_config() -> Config:
     """Get cached config instance."""
 
     config = Config()
-    config.console.print(config)
+    safe_config = SafeConfig.from_config(config)
+    config.console.print(safe_config)
     return config
 
 
