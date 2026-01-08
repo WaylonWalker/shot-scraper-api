@@ -139,20 +139,33 @@ async def get_shot(
     scaled_height: Optional[int | str] = None,
     scaled_width: Optional[int | str] = None,
     selectors: Optional[str] = None,
+    format: Optional[str] = None,
 ):
-    # Get format from filename extension
-    ext = filename.split(".")[-1].lower() if "." in filename else "webp"
-    if ext not in ["webp", "png", "jpg", "jpeg"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+    # Determine format from query parameter or filename extension
+    if format:
+        format = format.lower()
+        if format not in ["webp", "png", "jpg", "jpeg"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+            )
+    else:
+        ext = (
+            filename.split(".")[-1].lower() if filename and "." in filename else "webp"
         )
-
-    # Normalize jpeg to jpg
-    format = "jpg" if ext == "jpeg" else ext
+        if ext not in ["webp", "png", "jpg", "jpeg"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+            )
+        format = "jpg" if ext == "jpeg" else ext
 
     scaled_height = int(scaled_height) if scaled_height else height
     scaled_width = int(scaled_width) if scaled_width else width
+
+    # Ensure width and height are not None for take_screenshot
+    width = width or 800
+    height = height or 450
     selector_list = selectors.split(",") if selectors else []
 
     if not url.startswith("http"):
