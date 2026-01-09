@@ -1,3 +1,8 @@
+## 0.0.29
+
+- feat: support versions, tack `?v=1` for example to get a new version of your
+  screenshot, versions will be persisted and immutable.
+
 ## 0.0.28
 
 - fix: signal desktop preview fails due to missing HEAD request support

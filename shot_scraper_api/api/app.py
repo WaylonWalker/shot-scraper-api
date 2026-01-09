@@ -72,11 +72,13 @@ async def generate_image_data(
     format: str,
     scaled_width: int,
     scaled_height: int,
+    version: Optional[int] = None,
 ):
     """Generate image and return file path and format"""
-    # Generate unique filename
+    # Generate unique filename with version support
+    version_str = f"v{version}" if version is not None else ""
     imgname = (
-        hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
+        hashlib.md5(f"{url}{''.join(selector_list)}{version_str}".encode()).hexdigest()
         + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
     ).lower()
 
@@ -213,6 +215,7 @@ async def get_shot(
     scaled_width: Optional[int | str] = None,
     selectors: Optional[str] = None,
     format: Optional[str] = None,
+    v: Optional[int] = None,
 ):
     # Determine format from query parameter or filename extension
     if format:
@@ -248,11 +251,21 @@ async def get_shot(
     if not url.startswith("http"):
         raise HTTPException(status_code=404, detail="url is not a url")
 
+    # Validate version parameter
+    if v is not None and v <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Version must be a positive integer (v=1, v=2, etc.)",
+        )
+
     # Handle HTMX requests (only for GET)
     hx_request_header = request.headers.get("hx-request")
     if hx_request_header and request.method == "GET":
+        version_str = f"v{v}" if v is not None else ""
         imgname = (
-            hashlib.md5(f"{url}{''.join(selector_list)}".encode()).hexdigest()
+            hashlib.md5(
+                f"{url}{''.join(selector_list)}{version_str}".encode()
+            ).hexdigest()
             + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
         ).lower()
         print(
@@ -274,7 +287,7 @@ async def get_shot(
 
     # Generate or get image data
     imgname, output_path, exists_in_s3 = await generate_image_data(
-        url, width, height, selector_list, format, scaled_width, scaled_height
+        url, width, height, selector_list, format, scaled_width, scaled_height, v
     )
 
     # Get image data from S3
