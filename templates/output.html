@@ -1,13 +1,69 @@
 <pre class="bg-zinc-900 container overflow-x-scroll mx-auto my-8 p-4 ring-4 ring-zinc-950/5 rounded-lg shadow-lg shadow-zinc-950">
 <code><span class="text-zinc-400"># markdown </span>
-[![screenshot of {{url}}]({{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}})]({{url}})
+[![screenshot of {{url}}]({{request.url._url.split(request.url.path)[0]}}/shot/{{imgname}})]({{url}})
 
 <code><span class="text-zinc-400"># html </span>
-&lt;a href="{{url}}"&gt;&lt;img class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="{{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}" alt="shot" height="{{scaled_height}}" width="{{scaled_width}}" /&gt;&lt;/a&gt;
+&lt;a href="{{url}}"&gt;&lt;img class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="{{request.url._url.split(request.url.path)[0]}}/shot/{{imgname}}" alt="shot" height="{{scaled_height}}" width="{{scaled_width}}" /&gt;&lt;/a&gt;
 
 <span class="text-zinc-400"># curl</span>
-curl '{{request.url._url.split(request.url.path)[0]}}/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}' --output {{imgname}}
+curl '{{request.url._url.split(request.url.path)[0]}}/shot/{{imgname}}' --output {{imgname}}
     </code>
 </pre>
-<img class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="/shot/?url={{url}}&height={{height}}&width={{width}}&scaled_width={{scaled_width}}&scaled_height={{scaled_height}}&selectors={{selectors}}" alt="shot"
+<div id="shot-status" class="text-zinc-400 text-center">Status: {{status}}</div>
+<img id="shot-image" class="bg-zinc-900 mx-auto my-8 h-800 w-450" src="{% if status == 'exists' %}/shot/{{imgname}}{% endif %}" alt="shot"
     height="{{scaled_height}}" width="{{scaled_width}}" />
+
+<script>
+(function () {
+  const jobId = "{{ job_id or '' }}";
+  const statusEl = document.getElementById("shot-status");
+  const imgEl = document.getElementById("shot-image");
+  const resultUrl = "/shot/{{ imgname }}";
+
+  if (!jobId) {
+    if (imgEl && !imgEl.src) {
+      imgEl.src = resultUrl;
+    }
+    return;
+  }
+
+  let attempts = 0;
+  const maxAttempts = 120;
+
+  const poll = async () => {
+    attempts += 1;
+    try {
+      const response = await fetch(`/job/${jobId}`);
+      if (!response.ok) {
+        throw new Error("failed to fetch job status");
+      }
+      const data = await response.json();
+      if (statusEl) {
+        statusEl.textContent = `Status: ${data.status}`;
+      }
+      if (data.status === "completed") {
+        if (imgEl) {
+          imgEl.src = resultUrl;
+        }
+        return;
+      }
+      if (data.status === "failed") {
+        if (statusEl) {
+          statusEl.textContent = `Status: failed ${data.error || ''}`;
+        }
+        return;
+      }
+    } catch (error) {
+      if (statusEl) {
+        statusEl.textContent = "Status: error checking job";
+      }
+    }
+
+    if (attempts < maxAttempts) {
+      setTimeout(poll, 1000);
+    }
+  };
+
+  poll();
+})();
+</script>

@@ -32,6 +32,26 @@
                 <input class='mx-2 w-full bg-zinc-800 py-2 px-4 rounded' type="text" name="selectors" placeholder="#example" />
                 </div>
 
+                <div class='flex flex-row items-center mt-4 w-full justify-center'>
+                <label for="format">format</label>
+                <select class='mx-2 bg-zinc-800 py-2 px-4 rounded' name="format">
+                    <option value="">auto</option>
+                    <option value="webp">webp</option>
+                    <option value="png">png</option>
+                    <option value="jpg">jpg</option>
+                </select>
+                </div>
+
+                <div class='flex flex-row items-center mt-4 w-full justify-center'>
+                <label for="v">version</label>
+                <input class='w-36 mx-2 bg-zinc-800 py-2 px-4 rounded' type="number" name="v" placeholder="v (optional)" min="1" />
+                </div>
+
+                <div class='flex flex-row items-center mt-4 w-full justify-center'>
+                <label for="timeout">timeout (ms)</label>
+                <input class='w-36 mx-2 bg-zinc-800 py-2 px-4 rounded' type="number" name="timeout" placeholder="5000" min="1" />
+                </div>
+
                 </details>
 
                 <input class='mt-6 mx-auto bg-zinc-800 px-6 py-2 rounded ring-4 ring-zinc-950/5 shadow-lg shadow-zinc-950/50' type="submit" value="Submit" />

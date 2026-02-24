@@ -1,7 +1,25 @@
+## 0.0.30
+
+- feat: add build trigger mechanism for async screenshot generation
+- added: `POST /trigger/shot` endpoint to queue screenshots with priority levels (0-10)
+- added: `GET /job/{job_id}` endpoint to check individual job status
+- added: `GET /queue/stats` endpoint to monitor queue statistics
+- added: background task processor that handles queued screenshots asynchronously
+- added: enhanced `HEAD /shot/` endpoint with `X-Screenshot-Status` header
+- added: priority-based job processing (higher priority jobs processed first)
+- added: persistent job queue using diskcache (survives server restarts)
+- added: duplicate detection - won't re-queue existing screenshots
+- added: automatic cleanup of old completed/failed jobs (24 hours)
+- added: comprehensive build process integration with fast response times
+- refactored: screenshot generation logic moved to separate module to avoid circular imports
+
 ## 0.0.29
 
 - feat: support versions, tack `?v=1` for example to get a new version of your
   screenshot, versions will be persisted and immutable.
+- added: version parameter validation (positive integers only)
+- changed: cache key generation now includes version in MD5 hash for unique filenames
+- maintained: full backward compatibility - no version parameter works exactly like before
 
 ## 0.0.28
 

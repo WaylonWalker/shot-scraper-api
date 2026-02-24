@@ -46,6 +46,7 @@ dependencies = [
   "typer",
   "uvicorn[standard]",
   "diskcache",
+  "redis",
 ]
 dynamic = ["version"]
 

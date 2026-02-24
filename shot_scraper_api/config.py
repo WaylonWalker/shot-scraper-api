@@ -8,11 +8,11 @@ from shot_scraper_api.s3 import S3Client
 
 from pydantic import BaseModel
 
+
 def redact(value: str | None, keep: int = 4) -> str | None:
     if not value:
         return value
     return value[:keep] + "*" * (len(value) - keep)
-
 
 
 class Config(BaseSettings):
@@ -27,6 +27,10 @@ class Config(BaseSettings):
     docker_repo: Optional[str] = Field(None)
     max_file_size_mb: Optional[int] = Field(100)
     cache_dir: Optional[str] = Field("/cache/")
+    redis_url: Optional[str] = Field(None)
+    queue_backend: Optional[str] = Field("auto")
+    queue_namespace: Optional[str] = Field("shot-scraper")
+    queue_processor_enabled: bool = Field(True)
 
     class Config:
         env_file = ".env"
@@ -58,7 +62,6 @@ class Config(BaseSettings):
 
 
 class SafeConfig(Config):
-
     @classmethod
     def from_config(cls, config):
         return cls(
@@ -68,7 +71,12 @@ class SafeConfig(Config):
             aws_endpoint_url=config.aws_endpoint_url,
             aws_bucket_name=config.aws_bucket_name,
             cache_dir=config.cache_dir,
+            redis_url=redact(config.redis_url),
+            queue_backend=config.queue_backend,
+            queue_namespace=config.queue_namespace,
+            queue_processor_enabled=config.queue_processor_enabled,
         )
+
 
 @lru_cache()
 def get_config() -> Config:
