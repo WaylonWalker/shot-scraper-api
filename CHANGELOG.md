@@ -1,3 +1,11 @@
+## 0.0.31
+
+- feat: add blocking image endpoint for crawler and OG consumers
+- added: `GET /shot/blocking` and `HEAD /shot/blocking` to queue, wait, and return image bytes
+- added: `wait` query parameter (default `30000`, max `120000`) for blocking timeout control
+- changed: shared format/version/timeout parsing and image header helpers in API routes
+- maintained: existing `/shot` async JSON queue behavior for current clients
+
 ## 0.0.30
 
 - feat: add build trigger mechanism for async screenshot generation

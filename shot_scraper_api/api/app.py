@@ -1,5 +1,7 @@
+import asyncio
 import os
-from typing import Optional
+import time
+from typing import Dict, Optional
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -76,6 +78,93 @@ if config.env == "dev":
     templates.env.globals["hot_reload"] = hot_reload
 
 templates.env.filters["quote_plus"] = lambda u: quote_plus(str(u))
+
+
+def _normalize_format(format: Optional[str], filename: Optional[str] = None) -> str:
+    """Normalize requested screenshot format."""
+    if format:
+        normalized_format = format.lower()
+        if normalized_format not in ["webp", "png", "jpg", "jpeg"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+            )
+        return "jpg" if normalized_format == "jpeg" else normalized_format
+
+    ext = filename.split(".")[-1].lower() if filename and "." in filename else "webp"
+    if ext not in ["webp", "png", "jpg", "jpeg"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
+        )
+    return "jpg" if ext == "jpeg" else ext
+
+
+def _parse_version(v: Optional[str]) -> Optional[int]:
+    """Parse and validate version query parameter."""
+    version = None
+    if v is not None and v.strip():
+        try:
+            version = int(v)
+            if version <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Version must be a positive integer (v=1, v=2, etc.)",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Version must be a valid integer (v=1, v=2, etc.)",
+            )
+    return version
+
+
+def _parse_timeout(timeout: Optional[str]) -> Optional[int]:
+    """Parse and validate screenshot timeout in milliseconds."""
+    timeout_ms = None
+    if timeout is not None and timeout.strip():
+        try:
+            timeout_ms = int(timeout)
+            if timeout_ms <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Timeout must be a positive integer in milliseconds (e.g., 5000 for 5 seconds)",
+                )
+            if timeout_ms > 60000:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Timeout cannot exceed 60000 milliseconds (60 seconds)",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Timeout must be a valid integer in milliseconds (e.g., 5000 for 5 seconds)",
+            )
+    return timeout_ms
+
+
+def _image_headers(format: str, status: str = "ready") -> Dict[str, str]:
+    """Build common image response headers."""
+    return {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Type": f"image/{format}",
+        "Access-Control-Allow-Origin": "*",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "X-Screenshot-Status": status,
+    }
+
+
+async def _serve_image(filename: str, format: str, method: str):
+    """Serve image from object storage."""
+    if method == "HEAD":
+        return Response(headers=_image_headers(format), status_code=200)
+
+    imgdata = await config.s3_client.get_file(filename)
+    return StreamingResponse(
+        content=imgdata,
+        media_type=f"image/{format}",
+        headers=_image_headers(format),
+    )
 
 
 @app.get("/")
@@ -259,6 +348,91 @@ async def get_queue_stats():
     return JSONResponse(stats)
 
 
+@app.api_route("/shot/blocking", methods=["GET", "HEAD"])
+@app.api_route("/shot/blocking/", methods=["GET", "HEAD"])
+async def get_shot_blocking(
+    request: Request,
+    url: str = Query(...),
+    height: Optional[int] = 450,
+    width: Optional[int] = 800,
+    scaled_height: Optional[int | str] = None,
+    scaled_width: Optional[int | str] = None,
+    selectors: Optional[str] = None,
+    format: Optional[str] = None,
+    v: Optional[str] = Query(default=None),
+    timeout: Optional[str] = Query(default=None),
+    wait: int = Query(default=30000, description="Max wait time in milliseconds"),
+):
+    """Block until screenshot is ready and return image bytes."""
+    format = _normalize_format(format)
+
+    if not url.startswith("http"):
+        raise HTTPException(status_code=404, detail="url is not a url")
+
+    if wait <= 0:
+        raise HTTPException(status_code=400, detail="wait must be a positive integer")
+    if wait > 120000:
+        raise HTTPException(status_code=400, detail="wait cannot exceed 120000 ms")
+
+    width = width or 800
+    height = height or 450
+    scaled_height = int(scaled_height) if scaled_height else height
+    scaled_width = int(scaled_width) if scaled_width else width
+    selector_list = selectors.split(",") if selectors else []
+
+    version = _parse_version(v)
+    timeout_ms = _parse_timeout(timeout)
+
+    imgname = build_image_name(
+        url,
+        selector_list,
+        width,
+        height,
+        scaled_width,
+        scaled_height,
+        format,
+        version,
+    )
+
+    if config.s3_client.file_exists(imgname):
+        return await _serve_image(imgname, format, request.method)
+
+    queue = get_queue()
+    job_id = queue.get_job_id_by_filename(imgname)
+    if not job_id:
+        job_id = queue.add_job(
+            url=url,
+            width=width,
+            height=height,
+            selectors=selectors,
+            format=format,
+            scaled_width=scaled_width,
+            scaled_height=scaled_height,
+            version=version,
+            timeout=timeout_ms,
+            priority=0,
+        )
+
+    deadline = time.monotonic() + (wait / 1000)
+    while time.monotonic() < deadline:
+        if config.s3_client.file_exists(imgname):
+            return await _serve_image(imgname, format, request.method)
+
+        job_data = queue.get_job(job_id)
+        if job_data and job_data.get("status") == "failed":
+            raise HTTPException(
+                status_code=500,
+                detail=job_data.get("error") or "Screenshot job failed",
+            )
+
+        await asyncio.sleep(0.5)
+
+    raise HTTPException(
+        status_code=504,
+        detail=f"Timed out waiting for screenshot after {wait}ms",
+    )
+
+
 @app.api_route("/shot/", methods=["GET", "HEAD"])
 @app.api_route("/shot", methods=["GET", "HEAD"])
 @app.api_route("/shot/{filename}", methods=["GET", "HEAD"])
@@ -276,53 +450,13 @@ async def get_shot(
     v: Optional[str] = Query(default=None),
     timeout: Optional[str] = Query(default=None),
 ):
-    # Determine format from query parameter or filename extension
-    if format:
-        format = format.lower()
-        if format not in ["webp", "png", "jpg", "jpeg"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
-            )
-        if format == "jpeg":
-            format = "jpg"
-    else:
-        ext = (
-            filename.split(".")[-1].lower() if filename and "." in filename else "webp"
-        )
-        if ext not in ["webp", "png", "jpg", "jpeg"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid format. Must be one of: webp, png, jpg/jpeg",
-            )
-        format = "jpg" if ext == "jpeg" else ext
+    format = _normalize_format(format, filename)
 
     if url is None:
         if not filename:
             raise HTTPException(status_code=400, detail="url is required")
 
-        imgdata = await config.s3_client.get_file(filename)
-        if request.method == "HEAD":
-            headers = {
-                "Cache-Control": "public, max-age=86400",
-                "Content-Type": f"image/{format}",
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-                "X-Screenshot-Status": "ready",
-            }
-            return Response(headers=headers, status_code=200)
-
-        return StreamingResponse(
-            content=imgdata,
-            media_type=f"image/{format}",
-            headers={
-                "Cache-Control": "public, max-age=86400",
-                "Content-Type": f"image/{format}",
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-                "X-Screenshot-Status": "ready",
-            },
-        )
+        return await _serve_image(filename, format, request.method)
 
     scaled_height = int(scaled_height) if scaled_height else height
     scaled_width = int(scaled_width) if scaled_width else width
@@ -339,42 +473,8 @@ async def get_shot(
     if not url.startswith("http"):
         raise HTTPException(status_code=404, detail="url is not a url")
 
-    # Parse and validate version parameter
-    version = None
-    if v is not None and v.strip():  # Check if v is not empty string
-        try:
-            version = int(v)
-            if version <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Version must be a positive integer (v=1, v=2, etc.)",
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Version must be a valid integer (v=1, v=2, etc.)",
-            )
-
-    # Parse and validate timeout parameter
-    timeout_ms = None
-    if timeout is not None and timeout.strip():  # Check if timeout is not empty string
-        try:
-            timeout_ms = int(timeout)
-            if timeout_ms <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Timeout must be a positive integer in milliseconds (e.g., 5000 for 5 seconds)",
-                )
-            if timeout_ms > 60000:  # 60 second maximum
-                raise HTTPException(
-                    status_code=400,
-                    detail="Timeout cannot exceed 60000 milliseconds (60 seconds)",
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Timeout must be a valid integer in milliseconds (e.g., 5000 for 5 seconds)",
-            )
+    version = _parse_version(v)
+    timeout_ms = _parse_timeout(timeout)
 
     # Handle HTMX requests (only for GET)
     hx_request_header = request.headers.get("hx-request")
@@ -444,14 +544,7 @@ async def get_shot(
 
     if config.s3_client.file_exists(imgname):
         if request.method == "HEAD":
-            headers = {
-                "Cache-Control": "public, max-age=86400",
-                "Content-Type": f"image/{format}",
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-                "X-Screenshot-Status": "ready",
-            }
-            return Response(headers=headers, status_code=200)
+            return Response(headers=_image_headers(format), status_code=200)
 
         return JSONResponse(
             {
