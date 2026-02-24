@@ -1,3 +1,10 @@
+## 0.0.32
+
+- fix: wait for visible media before capture to reduce incomplete screenshots
+- added: pre-capture wait for visible in-viewport images to finish loading
+- added: pre-capture font readiness wait for more stable text rendering
+- changed: video readiness wait now uses a bounded shared media timeout
+
 ## 0.0.31
 
 - feat: add blocking image endpoint for crawler and OG consumers

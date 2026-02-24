@@ -58,6 +58,56 @@ async def take_screenshot(
             except:
                 console.log(f"Selector {selector} not found")
 
+        media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
+
+        # Wait for visible images and fonts to settle before capture.
+        try:
+            await page.waitForFunction(
+                """
+                () => {
+                    if (!document.fonts || !document.fonts.ready) {
+                        return true;
+                    }
+                    return document.fonts.status === 'loaded';
+                }
+                """,
+                {"timeout": media_wait_timeout},
+            )
+        except Exception as e:
+            console.log(f"Font readiness wait skipped: {e}")
+
+        try:
+            await page.waitForFunction(
+                """
+                () => {
+                    const visibleImages = Array.from(document.images).filter((img) => {
+                        const rect = img.getBoundingClientRect();
+                        const style = window.getComputedStyle(img);
+                        const onScreen =
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth;
+                        const visible =
+                            rect.width > 0 &&
+                            rect.height > 0 &&
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden';
+                        return onScreen && visible;
+                    });
+
+                    if (visibleImages.length === 0) {
+                        return true;
+                    }
+
+                    return visibleImages.every((img) => img.complete);
+                }
+                """,
+                {"timeout": media_wait_timeout},
+            )
+        except Exception as e:
+            console.log(f"Visible image wait skipped: {e}")
+
         # Enhanced video handling
         try:
             # Try to play videos and wait for them to be ready
@@ -83,7 +133,7 @@ async def take_screenshot(
 
             # Wait for videos to be ready if timeout is specified
             if timeout_ms:
-                console.log(f"Waiting {timeout_ms}ms for videos to load...")
+                console.log(f"Waiting {media_wait_timeout}ms for videos to load...")
                 await page.waitForFunction(
                     """
                     () => {
@@ -96,7 +146,7 @@ async def take_screenshot(
                         });
                     }
                     """,
-                    {"timeout": timeout_ms},
+                    {"timeout": media_wait_timeout},
                 )
             else:
                 # Default 5 second wait for videos
