@@ -1,5 +1,8 @@
 FROM python:3.12-slim
-ENV DEBIAN_FRONTEND=noninteractive
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -48,16 +51,16 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY pyproject.toml /app
-COPY shot_scraper_api/__about__.py /app/shot_scraper_api/__about__.py
-COPY README.md /app
-RUN pip3 install --no-cache-dir --root-user-action=ignore --upgrade pip wheel
-RUN pip3 install --no-cache-dir --root-user-action=ignore .
-RUN pyppeteer-install
+# Install Python dependencies early for better cache reuse
+COPY requirements-docker.txt /tmp/requirements-docker.txt
+RUN pip3 install --no-cache-dir --root-user-action=ignore --upgrade pip wheel && \
+    pip3 install --no-cache-dir --root-user-action=ignore -r /tmp/requirements-docker.txt && \
+    pyppeteer-install
 
-# Copy application code
-COPY . /app
+# Copy only runtime application files
+COPY shot_scraper_api /app/shot_scraper_api
+COPY templates /app/templates
+COPY static /app/static
 
 EXPOSE 5000
 ENV env=prod

@@ -100,6 +100,7 @@ class QueueBase:
         scaled_height: Optional[int] = None,
         version: Optional[int] = None,
         timeout: Optional[int] = None,
+        theme: Optional[str] = None,
         priority: int = 0,
     ) -> str:
         raise NotImplementedError
@@ -135,6 +136,7 @@ class QueueBase:
         scaled_width: Optional[int] = None,
         scaled_height: Optional[int] = None,
         format: str = "webp",
+        theme: Optional[str] = None,
     ) -> bool:
         raise NotImplementedError
 
@@ -167,6 +169,7 @@ class ScreenshotQueue(QueueBase):
         scaled_height: Optional[int] = None,
         version: Optional[int] = None,
         timeout: Optional[int] = None,
+        theme: Optional[str] = None,
         priority: int = 0,
     ) -> str:
         """Add a screenshot job to the queue"""
@@ -183,6 +186,7 @@ class ScreenshotQueue(QueueBase):
             scaled_height,
             format,
             version,
+            theme,
         )
 
         job_data = {
@@ -196,6 +200,7 @@ class ScreenshotQueue(QueueBase):
             "scaled_height": scaled_height,
             "version": version,
             "timeout": timeout,
+            "theme": theme,
             "priority": priority,
             "status": JobStatus.QUEUED.value,
             "created_at": time.time(),
@@ -304,6 +309,7 @@ class ScreenshotQueue(QueueBase):
         scaled_width: Optional[int] = None,
         scaled_height: Optional[int] = None,
         format: str = "webp",
+        theme: Optional[str] = None,
     ) -> bool:
         """Check if a shot with the same parameters is already queued or processing"""
         scaled_width = scaled_width or width
@@ -318,6 +324,7 @@ class ScreenshotQueue(QueueBase):
             scaled_height,
             format,
             version,
+            theme,
         )
 
         filename_index_raw = self.cache.get(self.job_index_key)
@@ -471,6 +478,7 @@ class RedisQueue(QueueBase):
         scaled_height: Optional[int] = None,
         version: Optional[int] = None,
         timeout: Optional[int] = None,
+        theme: Optional[str] = None,
         priority: int = 0,
     ) -> str:
         job_id = self._get_next_job_id()
@@ -486,6 +494,7 @@ class RedisQueue(QueueBase):
             scaled_height,
             format,
             version,
+            theme,
         )
 
         job_data = {
@@ -499,6 +508,7 @@ class RedisQueue(QueueBase):
             "scaled_height": scaled_height,
             "version": version,
             "timeout": timeout,
+            "theme": theme,
             "priority": priority,
             "status": JobStatus.QUEUED.value,
             "created_at": time.time(),
@@ -615,6 +625,7 @@ class RedisQueue(QueueBase):
         scaled_width: Optional[int] = None,
         scaled_height: Optional[int] = None,
         format: str = "webp",
+        theme: Optional[str] = None,
     ) -> bool:
         scaled_width = scaled_width or width
         scaled_height = scaled_height or height
@@ -628,6 +639,7 @@ class RedisQueue(QueueBase):
             scaled_height,
             format,
             version,
+            theme,
         )
 
         job_id = self.redis.get(self._job_index_key(expected_filename))

@@ -960,3 +960,16 @@ FodyWeavers.xsd
 
 # End of https://www.toptal.com/developers/gitignore/api/vim,node,data,emacs,python,pycharm,executable,sublimetext,visualstudio,visualstudiocode
 s3
+data
+collage-120.webm
+collage-20fps-800x-2k.webm
+collage-20fps-full-200.webm
+collage-20fps-full-2k.webm
+collage-20fps-full-600.webm
+collage-20fps-full.webm
+collage-20fps.webm
+collage-8k.png
+collage.png
+collage.webm
+test-signal-url.jpg
+test_build_trigger.sh

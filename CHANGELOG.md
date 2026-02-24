@@ -1,3 +1,12 @@
+## 0.0.34
+
+- added: `theme` query parameter (`light` or `dark`) to `/shot`, `/shot/async`, `/shot/blocking`, `/trigger/shot`, and `DELETE /shot` filename generation for deterministic theme-specific cache keys
+- changed: screenshot cache key generation now includes theme, allowing separate immutable dark and light variants for the same URL and dimensions
+- changed: queue payloads and dedupe checks now include theme so worker jobs remain consistent across API, queue, and processor paths
+- improved: browser launch now includes autoplay-friendly Chromium flags (`--autoplay-policy=no-user-gesture-required`, `--mute-audio`) to improve initial video frame capture reliability
+- improved: screenshot rendering now emulates `prefers-color-scheme` and applies document color scheme hints before capture when `theme` is provided
+- improved: media readiness wait extended to 10s max and video readiness logic now accepts any visible video with frame data, reducing false timeouts when one embed stalls
+
 ## 0.0.33
 
 - changed: `GET /shot?url=...` now defaults to blocking image responses for legacy OG/image consumers

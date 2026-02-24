@@ -75,6 +75,7 @@ class QueueProcessor:
                 scaled_height=job["scaled_height"],
                 version=job["version"],
                 timeout_ms=job["timeout"],
+                theme=job.get("theme"),
             )
 
             # Mark as completed

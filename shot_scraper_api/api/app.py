@@ -143,6 +143,24 @@ def _parse_timeout(timeout: Optional[str]) -> Optional[int]:
     return timeout_ms
 
 
+def _parse_theme(theme: Optional[str]) -> Optional[str]:
+    """Parse and validate screenshot theme preference."""
+    if theme is None:
+        return None
+
+    normalized_theme = theme.strip().lower()
+    if not normalized_theme:
+        return None
+
+    if normalized_theme not in ["light", "dark"]:
+        raise HTTPException(
+            status_code=400,
+            detail="theme must be one of: light, dark",
+        )
+
+    return normalized_theme
+
+
 def _image_headers(format: str, status: str = "ready") -> Dict[str, str]:
     """Build common image response headers."""
     return {
@@ -211,6 +229,7 @@ async def _get_async_shot_response(
     format: str,
     version: Optional[int],
     timeout_ms: Optional[int],
+    theme: Optional[str],
 ):
     """Return async queue-oriented response for screenshot requests."""
     selector_list = selectors.split(",") if selectors else []
@@ -223,6 +242,7 @@ async def _get_async_shot_response(
         scaled_height,
         format,
         version,
+        theme,
     )
 
     if config.s3_client.file_exists(imgname):
@@ -248,6 +268,7 @@ async def _get_async_shot_response(
         scaled_width,
         scaled_height,
         format,
+        theme,
     ):
         job_id = queue.get_job_id_by_filename(imgname)
         if request_method == "HEAD":
@@ -274,6 +295,7 @@ async def _get_async_shot_response(
         scaled_height=scaled_height,
         version=version,
         timeout=timeout_ms,
+        theme=theme,
         priority=0,
     )
 
@@ -305,6 +327,7 @@ async def _get_blocking_shot_response(
     format: str,
     version: Optional[int],
     timeout_ms: Optional[int],
+    theme: Optional[str],
     wait_ms: int,
 ):
     """Queue, wait for completion, and return image response."""
@@ -319,6 +342,7 @@ async def _get_blocking_shot_response(
         scaled_height,
         format,
         version,
+        theme,
     )
 
     if config.s3_client.file_exists(imgname):
@@ -337,6 +361,7 @@ async def _get_blocking_shot_response(
             scaled_height=scaled_height,
             version=version,
             timeout=timeout_ms,
+            theme=theme,
             priority=0,
         )
 
@@ -389,6 +414,7 @@ async def trigger_shot(
     format: Optional[str] = Query(default="webp"),
     v: Optional[str] = Query(default=None),
     timeout: Optional[str] = Query(default=None),
+    theme: Optional[str] = Query(default=None),
     priority: int = Query(default=0),
 ):
     """Trigger a screenshot job for build processes"""
@@ -440,6 +466,8 @@ async def trigger_shot(
                 detail="Timeout must be a valid integer in milliseconds",
             )
 
+    parsed_theme = _parse_theme(theme)
+
     # Validate priority
     if not (0 <= priority <= 10):
         raise HTTPException(
@@ -458,6 +486,7 @@ async def trigger_shot(
         scaled_height or height,
         format,
         version,
+        parsed_theme,
     )
 
     # Check if already queued or processing
@@ -471,6 +500,7 @@ async def trigger_shot(
         scaled_width,
         scaled_height,
         format,
+        parsed_theme,
     ):
         job_id = queue.get_job_id_by_filename(imgname)
         return _json_no_cache_response(
@@ -504,6 +534,7 @@ async def trigger_shot(
         scaled_height=scaled_height,
         version=version,
         timeout=timeout_ms,
+        theme=parsed_theme,
         priority=priority,
     )
 
@@ -554,6 +585,7 @@ async def get_shot_blocking(
     format: Optional[str] = None,
     v: Optional[str] = Query(default=None),
     timeout: Optional[str] = Query(default=None),
+    theme: Optional[str] = Query(default=None),
     wait: int = Query(default=30000, description="Max wait time in milliseconds"),
 ):
     """Block until screenshot is ready and return image bytes."""
@@ -573,6 +605,7 @@ async def get_shot_blocking(
     scaled_width = int(scaled_width) if scaled_width else width
     version = _parse_version(v)
     timeout_ms = _parse_timeout(timeout)
+    parsed_theme = _parse_theme(theme)
     return await _get_blocking_shot_response(
         request_method=request.method,
         url=url,
@@ -584,6 +617,7 @@ async def get_shot_blocking(
         format=format,
         version=version,
         timeout_ms=timeout_ms,
+        theme=parsed_theme,
         wait_ms=wait,
     )
 
@@ -601,6 +635,7 @@ async def get_shot_async(
     format: Optional[str] = None,
     v: Optional[str] = Query(default=None),
     timeout: Optional[str] = Query(default=None),
+    theme: Optional[str] = Query(default=None),
 ):
     """Return queue status JSON instead of blocking for image bytes."""
     format = _normalize_format(format)
@@ -615,6 +650,7 @@ async def get_shot_async(
 
     version = _parse_version(v)
     timeout_ms = _parse_timeout(timeout)
+    parsed_theme = _parse_theme(theme)
 
     return await _get_async_shot_response(
         request_method=request.method,
@@ -627,6 +663,7 @@ async def get_shot_async(
         format=format,
         version=version,
         timeout_ms=timeout_ms,
+        theme=parsed_theme,
     )
 
 
@@ -646,6 +683,7 @@ async def get_shot(
     format: Optional[str] = None,
     v: Optional[str] = Query(default=None),
     timeout: Optional[str] = Query(default=None),
+    theme: Optional[str] = Query(default=None),
     wait: int = Query(default=30000, description="Max wait time in milliseconds"),
     mode: Optional[str] = Query(default=None),
 ):
@@ -673,6 +711,7 @@ async def get_shot(
 
     version = _parse_version(v)
     timeout_ms = _parse_timeout(timeout)
+    parsed_theme = _parse_theme(theme)
 
     # Handle HTMX requests (only for GET)
     hx_request_header = request.headers.get("hx-request")
@@ -687,6 +726,7 @@ async def get_shot(
             scaled_height,
             format,
             version,
+            parsed_theme,
         )
         print(
             f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
@@ -708,6 +748,7 @@ async def get_shot(
                     scaled_height=scaled_height,
                     version=version,
                     timeout=timeout_ms,
+                    theme=parsed_theme,
                     priority=0,
                 )
                 status = "queued"
@@ -725,6 +766,7 @@ async def get_shot(
                 "format": format,
                 "v": v,
                 "timeout": timeout,
+                "theme": parsed_theme,
                 "job_id": job_id,
                 "status": status,
             },
@@ -742,6 +784,7 @@ async def get_shot(
             format=format,
             version=version,
             timeout_ms=timeout_ms,
+            theme=parsed_theme,
         )
 
     if wait <= 0:
@@ -760,6 +803,7 @@ async def get_shot(
         format=format,
         version=version,
         timeout_ms=timeout_ms,
+        theme=parsed_theme,
         wait_ms=wait,
     )
 
@@ -778,6 +822,7 @@ async def delete_shot(
     selectors: Optional[str] = None,
     format: Optional[str] = None,
     v: Optional[str] = Query(default=None),
+    theme: Optional[str] = Query(default=None),
 ):
     """Delete an existing screenshot object from storage."""
     resolved_filename = filename
@@ -793,6 +838,7 @@ async def delete_shot(
 
         normalized_format = _normalize_format(format)
         version = _parse_version(v)
+        parsed_theme = _parse_theme(theme)
 
         width = width or 800
         height = height or 450
@@ -809,6 +855,7 @@ async def delete_shot(
             scaled_height,
             normalized_format,
             version,
+            parsed_theme,
         )
     else:
         _normalize_format(format=None, filename=resolved_filename)

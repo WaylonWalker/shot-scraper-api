@@ -1,0 +1,17 @@
+anyconfig
+fastapi
+arel
+jinja2
+pydantic
+pydantic-settings
+rich
+boto3
+pyppeteer
+python-dotenv
+aiofiles
+textual
+toml
+typer
+uvicorn[standard]
+diskcache
+redis

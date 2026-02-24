@@ -20,11 +20,15 @@ def build_image_name(
     scaled_height: int,
     format: str,
     version: Optional[int] = None,
+    theme: Optional[str] = None,
 ) -> str:
     """Build a deterministic image filename."""
     version_str = f"v{version}" if version is not None else ""
+    theme_str = f"theme:{theme}" if theme else ""
     imgname = (
-        hashlib.md5(f"{url}{''.join(selector_list)}{version_str}".encode()).hexdigest()
+        hashlib.md5(
+            f"{url}{''.join(selector_list)}{version_str}{theme_str}".encode()
+        ).hexdigest()
         + f"-{width}x{height}-{scaled_width}x{scaled_height}.{format}"
     ).lower()
     return imgname
@@ -37,19 +41,48 @@ async def take_screenshot(
     selector_list: list,
     output: str,
     timeout_ms: Optional[int] = None,
+    theme: Optional[str] = None,
 ):
     """Take a screenshot of a webpage"""
     try:
         # Launch browser
-        browser = await launch(args=["--no-sandbox"])
+        browser = await launch(
+            args=[
+                "--no-sandbox",
+                "--autoplay-policy=no-user-gesture-required",
+                "--mute-audio",
+            ]
+        )
         page = await browser.newPage()
 
         # Set viewport
         await page.setViewport({"width": width, "height": height})
 
+        normalized_theme = (theme or "").strip().lower()
+        if normalized_theme in ["dark", "light"]:
+            await page.emulateMediaFeatures(
+                [
+                    {
+                        "name": "prefers-color-scheme",
+                        "value": normalized_theme,
+                    }
+                ]
+            )
+
         # Navigate to URL with custom timeout
         page_timeout = timeout_ms if timeout_ms else 30000
         await page.goto(url, {"waitUntil": "domcontentloaded", "timeout": page_timeout})
+
+        if normalized_theme in ["dark", "light"]:
+            await page.evaluate(
+                """
+                (targetTheme) => {
+                    document.documentElement.style.colorScheme = targetTheme;
+                    document.documentElement.setAttribute('data-shot-theme', targetTheme);
+                }
+                """,
+                normalized_theme,
+            )
 
         # Wait for selectors if specified
         for selector in selector_list:
@@ -58,7 +91,7 @@ async def take_screenshot(
             except:
                 console.log(f"Selector {selector} not found")
 
-        media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
+        media_wait_timeout = min(timeout_ms, 10000) if timeout_ms else 10000
 
         # Wait for visible images and fonts to settle before capture.
         try:
@@ -185,7 +218,7 @@ async def take_screenshot(
                         const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
                         if (videos.length === 0) return true;
 
-                        return videos.every((video) => {
+                        return videos.some((video) => {
                             const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
                             const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
                             return hasFrame && hasStarted;
@@ -217,7 +250,7 @@ async def take_screenshot(
 
                         const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
                         if (videos.length === 0) return true;
-                        return videos.every((video) => {
+                        return videos.some((video) => {
                             const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
                             const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
                             return hasFrame && hasStarted;
@@ -229,11 +262,7 @@ async def take_screenshot(
 
         except Exception as e:
             console.log(f"Video handling failed: {e}")
-            # Fallback to simple wait
-            if timeout_ms:
-                await asyncio.sleep(timeout_ms / 1000)
-            else:
-                await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
         # Take screenshot
         await page.screenshot({"path": output, "fullPage": False})
@@ -254,6 +283,7 @@ async def generate_image_data(
     scaled_height: int,
     version: Optional[int] = None,
     timeout_ms: Optional[int] = None,
+    theme: Optional[str] = None,
 ):
     """Generate image and return file path and format"""
     # Generate unique filename with version support
@@ -266,6 +296,7 @@ async def generate_image_data(
         scaled_height,
         format,
         version,
+        theme,
     )
 
     output = "/tmp/" + imgname.replace(format, "png")
@@ -277,7 +308,7 @@ async def generate_image_data(
 
     # Take screenshot
     screenshot_success = await take_screenshot(
-        url, width, height, selector_list, output, timeout_ms
+        url, width, height, selector_list, output, timeout_ms, theme
     )
     if not screenshot_success:
         raise HTTPException(status_code=500, detail="Failed to take screenshot")
