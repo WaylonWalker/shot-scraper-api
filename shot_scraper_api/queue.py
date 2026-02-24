@@ -1,7 +1,7 @@
 import enum
 import json
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import diskcache
 from redis import Redis
@@ -15,6 +15,77 @@ class JobStatus(enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+def _safe_avg(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 3)
+
+
+def _build_job_stats(job_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build queue and timing stats from job rows."""
+    now = time.time()
+    stats: Dict[str, Any] = {status.value: 0 for status in JobStatus}
+    stats["total"] = 0
+
+    completed_durations: List[float] = []
+    terminal_durations: List[float] = []
+    queued_ages: List[float] = []
+    processing_ages: List[float] = []
+    completed_last_hour = 0
+
+    for row in job_rows:
+        status = row.get("status")
+        created_at = row.get("created_at")
+        updated_at = row.get("updated_at")
+
+        if status in stats:
+            stats[status] += 1
+        stats["total"] += 1
+
+        if isinstance(created_at, (int, float)) and isinstance(
+            updated_at, (int, float)
+        ):
+            duration = max(0.0, updated_at - created_at)
+            if status == JobStatus.COMPLETED.value:
+                completed_durations.append(duration)
+            if status in [JobStatus.COMPLETED.value, JobStatus.FAILED.value]:
+                terminal_durations.append(duration)
+
+        if status == JobStatus.QUEUED.value and isinstance(created_at, (int, float)):
+            queued_ages.append(max(0.0, now - created_at))
+
+        if status == JobStatus.PROCESSING.value and isinstance(
+            created_at, (int, float)
+        ):
+            processing_ages.append(max(0.0, now - created_at))
+
+        if (
+            status == JobStatus.COMPLETED.value
+            and isinstance(updated_at, (int, float))
+            and updated_at >= now - 3600
+        ):
+            completed_last_hour += 1
+
+    terminal_total = stats[JobStatus.COMPLETED.value] + stats[JobStatus.FAILED.value]
+    success_rate = (
+        round((stats[JobStatus.COMPLETED.value] / terminal_total) * 100, 2)
+        if terminal_total
+        else 0.0
+    )
+
+    stats["avg_processing_time_seconds"] = _safe_avg(completed_durations)
+    stats["avg_terminal_time_seconds"] = _safe_avg(terminal_durations)
+    stats["queued_avg_age_seconds"] = _safe_avg(queued_ages)
+    stats["queued_oldest_age_seconds"] = (
+        round(max(queued_ages), 3) if queued_ages else 0.0
+    )
+    stats["processing_avg_age_seconds"] = _safe_avg(processing_ages)
+    stats["success_rate_percent"] = success_rate
+    stats["completed_last_hour"] = completed_last_hour
+
+    return stats
 
 
 class QueueBase:
@@ -67,7 +138,7 @@ class QueueBase:
     ) -> bool:
         raise NotImplementedError
 
-    def get_queue_stats(self) -> Dict[str, int]:
+    def get_queue_stats(self) -> Dict[str, Any]:
         raise NotImplementedError
 
     def cleanup_old_jobs(self, max_age_hours: int = 24):
@@ -266,21 +337,17 @@ class ScreenshotQueue(QueueBase):
             JobStatus.PROCESSING.value,
         ]
 
-    def get_queue_stats(self) -> Dict[str, int]:
+    def get_queue_stats(self) -> Dict[str, Any]:
         """Get queue statistics"""
-        stats = {status.value: 0 for status in JobStatus}
-        stats["total"] = 0
+        jobs: List[Dict[str, Any]] = []
 
         for key in list(self.cache.iterkeys()):
             if isinstance(key, str) and key.startswith("job:"):
                 job_data = self.cache.get(key)
                 if job_data and isinstance(job_data, dict):
-                    status = job_data.get("status")
-                    if status in stats:
-                        stats[status] += 1
-                    stats["total"] += 1
+                    jobs.append(job_data)
 
-        return stats
+        return _build_job_stats(jobs)
 
     def cleanup_old_jobs(self, max_age_hours: int = 24):
         """Clean up old completed/failed jobs"""
@@ -317,6 +384,71 @@ class RedisQueue(QueueBase):
         self.processing_key = f"{namespace}:processing"
         self.job_key_prefix = f"{namespace}:job:"
         self.job_index_prefix = f"{namespace}:job_by_filename:"
+        self.stats_key = f"{namespace}:stats"
+        self.completed_timestamps_key = f"{namespace}:completed_timestamps"
+
+    def _rebuild_stats(self) -> None:
+        """Rebuild aggregate stats from stored jobs."""
+        stats = {status.value: 0 for status in JobStatus}
+        stats["total"] = 0
+        completed_duration_sum = 0.0
+        completed_duration_count = 0
+        terminal_duration_sum = 0.0
+        terminal_duration_count = 0
+        completed_timestamps = []
+
+        for key in self.redis.scan_iter(match=f"{self.job_key_prefix}*"):
+            job_data = self.redis.get(key)
+            if not job_data:
+                continue
+            data = json.loads(job_data)
+            status = data.get("status")
+            created_at = data.get("created_at")
+            updated_at = data.get("updated_at")
+
+            if status in stats:
+                stats[status] += 1
+            stats["total"] += 1
+
+            if isinstance(created_at, (int, float)) and isinstance(
+                updated_at, (int, float)
+            ):
+                duration = max(0.0, updated_at - created_at)
+                if status == JobStatus.COMPLETED.value:
+                    completed_duration_sum += duration
+                    completed_duration_count += 1
+                if status in [JobStatus.COMPLETED.value, JobStatus.FAILED.value]:
+                    terminal_duration_sum += duration
+                    terminal_duration_count += 1
+
+            if status == JobStatus.COMPLETED.value and isinstance(
+                updated_at, (int, float)
+            ):
+                completed_timestamps.append((data.get("job_id"), updated_at))
+
+        pipeline = self.redis.pipeline()
+        pipeline.delete(self.stats_key)
+        pipeline.hset(
+            self.stats_key,
+            mapping={
+                JobStatus.QUEUED.value: stats[JobStatus.QUEUED.value],
+                JobStatus.PROCESSING.value: stats[JobStatus.PROCESSING.value],
+                JobStatus.COMPLETED.value: stats[JobStatus.COMPLETED.value],
+                JobStatus.FAILED.value: stats[JobStatus.FAILED.value],
+                "total": stats["total"],
+                "completed_duration_sum_seconds": round(completed_duration_sum, 3),
+                "completed_duration_count": completed_duration_count,
+                "terminal_duration_sum_seconds": round(terminal_duration_sum, 3),
+                "terminal_duration_count": terminal_duration_count,
+            },
+        )
+        pipeline.delete(self.completed_timestamps_key)
+        if completed_timestamps:
+            pipeline.zadd(
+                self.completed_timestamps_key,
+                {str(job_id): ts for job_id, ts in completed_timestamps if job_id},
+            )
+        pipeline.execute()
 
     def _job_key(self, job_id: str) -> str:
         return f"{self.job_key_prefix}{job_id}"
@@ -379,6 +511,8 @@ class RedisQueue(QueueBase):
         self.redis.set(self._job_key(job_id), json.dumps(job_data))
         self.redis.zadd(self.queue_key, {job_id: score})
         self.redis.set(self._job_index_key(expected_filename), job_id)
+        self.redis.hincrby(self.stats_key, JobStatus.QUEUED.value, 1)
+        self.redis.hincrby(self.stats_key, "total", 1)
 
         return job_id
 
@@ -409,14 +543,45 @@ class RedisQueue(QueueBase):
         if not job_data:
             return
 
+        previous_status = job_data.get("status")
+        now = time.time()
         job_data["status"] = status.value
-        job_data["updated_at"] = time.time()
+        job_data["updated_at"] = now
         if error:
             job_data["error"] = error
         if filename:
             job_data["filename"] = filename
 
         self.redis.set(self._job_key(job_id), json.dumps(job_data))
+
+        if previous_status != status.value:
+            pipeline = self.redis.pipeline()
+            if previous_status in [status.value for status in JobStatus]:
+                pipeline.hincrby(self.stats_key, previous_status, -1)
+            pipeline.hincrby(self.stats_key, status.value, 1)
+
+            created_at = job_data.get("created_at")
+            if isinstance(created_at, (int, float)) and status in [
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+            ]:
+                duration = max(0.0, now - created_at)
+                pipeline.hincrbyfloat(
+                    self.stats_key,
+                    "terminal_duration_sum_seconds",
+                    duration,
+                )
+                pipeline.hincrby(self.stats_key, "terminal_duration_count", 1)
+                if status == JobStatus.COMPLETED:
+                    pipeline.hincrbyfloat(
+                        self.stats_key,
+                        "completed_duration_sum_seconds",
+                        duration,
+                    )
+                    pipeline.hincrby(self.stats_key, "completed_duration_count", 1)
+                    pipeline.zadd(self.completed_timestamps_key, {job_id: now})
+
+            pipeline.execute()
 
         if status == JobStatus.PROCESSING:
             self.redis.zadd(self.processing_key, {job_id: time.time()})
@@ -478,21 +643,70 @@ class RedisQueue(QueueBase):
             JobStatus.PROCESSING.value,
         ]
 
-    def get_queue_stats(self) -> Dict[str, int]:
-        stats = {status.value: 0 for status in JobStatus}
-        stats["total"] = 0
+    def get_queue_stats(self) -> Dict[str, Any]:
+        if not self.redis.exists(self.stats_key):
+            self._rebuild_stats()
 
-        for key in self.redis.scan_iter(match=f"{self.job_key_prefix}*"):
-            job_data = self.redis.get(key)
-            if not job_data:
-                continue
-            data = json.loads(job_data)
-            status = data.get("status")
-            if status in stats:
-                stats[status] += 1
-            stats["total"] += 1
+        raw = self.redis.hgetall(self.stats_key)
+        now = time.time()
 
-        return stats
+        queued_ids = self.redis.zrange(self.queue_key, 0, -1)
+        processing_ids = self.redis.zrange(self.processing_key, 0, -1)
+
+        queued_ages: List[float] = []
+        for job_id in queued_ids:
+            job_data = self.get_job(job_id)
+            if job_data and isinstance(job_data.get("created_at"), (int, float)):
+                queued_ages.append(max(0.0, now - job_data["created_at"]))
+
+        processing_ages: List[float] = []
+        for job_id in processing_ids:
+            job_data = self.get_job(job_id)
+            if job_data and isinstance(job_data.get("created_at"), (int, float)):
+                processing_ages.append(max(0.0, now - job_data["created_at"]))
+
+        self.redis.zremrangebyscore(self.completed_timestamps_key, 0, now - 3600)
+        completed_last_hour = self.redis.zcard(self.completed_timestamps_key)
+
+        completed = int(raw.get(JobStatus.COMPLETED.value, 0))
+        failed = int(raw.get(JobStatus.FAILED.value, 0))
+        terminal_total = completed + failed
+        success_rate = (
+            round((completed / terminal_total) * 100, 2) if terminal_total else 0.0
+        )
+
+        completed_duration_sum = float(raw.get("completed_duration_sum_seconds", 0.0))
+        completed_duration_count = int(raw.get("completed_duration_count", 0))
+        terminal_duration_sum = float(raw.get("terminal_duration_sum_seconds", 0.0))
+        terminal_duration_count = int(raw.get("terminal_duration_count", 0))
+
+        avg_processing = (
+            round(completed_duration_sum / completed_duration_count, 3)
+            if completed_duration_count
+            else 0.0
+        )
+        avg_terminal = (
+            round(terminal_duration_sum / terminal_duration_count, 3)
+            if terminal_duration_count
+            else 0.0
+        )
+
+        return {
+            JobStatus.QUEUED.value: int(raw.get(JobStatus.QUEUED.value, 0)),
+            JobStatus.PROCESSING.value: int(raw.get(JobStatus.PROCESSING.value, 0)),
+            JobStatus.COMPLETED.value: completed,
+            JobStatus.FAILED.value: failed,
+            "total": int(raw.get("total", 0)),
+            "avg_processing_time_seconds": avg_processing,
+            "avg_terminal_time_seconds": avg_terminal,
+            "queued_avg_age_seconds": _safe_avg(queued_ages),
+            "queued_oldest_age_seconds": round(max(queued_ages), 3)
+            if queued_ages
+            else 0.0,
+            "processing_avg_age_seconds": _safe_avg(processing_ages),
+            "success_rate_percent": success_rate,
+            "completed_last_hour": int(completed_last_hour),
+        }
 
     def cleanup_old_jobs(self, max_age_hours: int = 24):
         cutoff_time = time.time() - (max_age_hours * 3600)

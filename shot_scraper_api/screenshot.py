@@ -110,16 +110,45 @@ async def take_screenshot(
 
         # Enhanced video handling
         try:
-            # Try to play videos and wait for them to be ready
+            # Try to play visible videos and wait for a renderable frame
             await page.evaluate("""
                 () => {
-                    // Find all video elements
-                    const videos = document.querySelectorAll('video');
+                    const isVisible = (el) => {
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        const onScreen =
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth;
+                        const visible =
+                            rect.width > 0 &&
+                            rect.height > 0 &&
+                            style.display !== 'none' &&
+                            style.visibility !== 'hidden';
+                        return onScreen && visible;
+                    };
+
+                    // Find visible video elements only
+                    const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
                     console.log(`Found ${videos.length} video elements`);
                     
                     // Try to play each video
                     videos.forEach((video, index) => {
                         video.muted = true;  // Mute to avoid autoplay issues
+                        video.playsInline = true;
+                        video.autoplay = true;
+                        video.preload = video.preload || 'auto';
+
+                        // Nudge off exact 0s where some players draw blank poster frames.
+                        if (video.readyState >= 1 && video.currentTime === 0) {
+                            try {
+                                video.currentTime = 0.05;
+                            } catch (err) {
+                                // Ignore seek failures
+                            }
+                        }
+
                         video.play().then(() => {
                             console.log(`Video ${index} started playing`);
                         }).catch(err => {
@@ -131,18 +160,35 @@ async def take_screenshot(
                 }
             """)
 
-            # Wait for videos to be ready if timeout is specified
+            # Wait for visible videos to have frame data before capture.
             if timeout_ms:
                 console.log(f"Waiting {media_wait_timeout}ms for videos to load...")
                 await page.waitForFunction(
                     """
                     () => {
-                        const videos = document.querySelectorAll('video');
+                        const isVisible = (el) => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const onScreen =
+                                rect.bottom > 0 &&
+                                rect.right > 0 &&
+                                rect.top < window.innerHeight &&
+                                rect.left < window.innerWidth;
+                            const visible =
+                                rect.width > 0 &&
+                                rect.height > 0 &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden';
+                            return onScreen && visible;
+                        };
+
+                        const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
                         if (videos.length === 0) return true;
-                        
-                        // Wait for at least one video to be playing or loaded
-                        return Array.from(videos).some(video => {
-                            return !video.paused || video.readyState >= 2; // HAVE_CURRENT_DATA
+
+                        return videos.every((video) => {
+                            const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+                            const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
+                            return hasFrame && hasStarted;
                         });
                     }
                     """,
@@ -153,9 +199,29 @@ async def take_screenshot(
                 await page.waitForFunction(
                     """
                     () => {
-                        const videos = document.querySelectorAll('video');
+                        const isVisible = (el) => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const onScreen =
+                                rect.bottom > 0 &&
+                                rect.right > 0 &&
+                                rect.top < window.innerHeight &&
+                                rect.left < window.innerWidth;
+                            const visible =
+                                rect.width > 0 &&
+                                rect.height > 0 &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden';
+                            return onScreen && visible;
+                        };
+
+                        const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
                         if (videos.length === 0) return true;
-                        return Array.from(videos).some(video => video.readyState >= 2);
+                        return videos.every((video) => {
+                            const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+                            const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
+                            return hasFrame && hasStarted;
+                        });
                     }
                     """,
                     {"timeout": 5000},

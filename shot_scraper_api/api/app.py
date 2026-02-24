@@ -146,12 +146,45 @@ def _parse_timeout(timeout: Optional[str]) -> Optional[int]:
 def _image_headers(format: str, status: str = "ready") -> Dict[str, str]:
     """Build common image response headers."""
     return {
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "public, max-age=86400, s-maxage=86400, immutable",
+        "CDN-Cache-Control": "public, s-maxage=86400, immutable",
         "Content-Type": f"image/{format}",
         "Access-Control-Allow-Origin": "*",
         "Cross-Origin-Resource-Policy": "cross-origin",
         "X-Screenshot-Status": status,
     }
+
+
+def _no_cache_headers() -> Dict[str, str]:
+    """Headers for dynamic non-cacheable responses."""
+    return {
+        "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+        "CDN-Cache-Control": "no-store",
+        "Pragma": "no-cache",
+    }
+
+
+def _status_headers(
+    format: str, status: str, job_id: Optional[str] = None
+) -> Dict[str, str]:
+    """Build headers for non-ready HEAD screenshot responses."""
+    headers = {
+        "Content-Type": f"image/{format}",
+        "Access-Control-Allow-Origin": "*",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "X-Screenshot-Status": status,
+    }
+    headers.update(_no_cache_headers())
+    if job_id is not None:
+        headers["X-Job-Id"] = job_id
+    return headers
+
+
+def _json_no_cache_response(
+    content: Dict[str, object], status_code: int = 200
+) -> JSONResponse:
+    """Return JSON response that should never be cached by edge/CDN."""
+    return JSONResponse(content, status_code=status_code, headers=_no_cache_headers())
 
 
 async def _serve_image(filename: str, format: str, method: str):
@@ -164,6 +197,166 @@ async def _serve_image(filename: str, format: str, method: str):
         content=imgdata,
         media_type=f"image/{format}",
         headers=_image_headers(format),
+    )
+
+
+async def _get_async_shot_response(
+    request_method: str,
+    url: str,
+    width: int,
+    height: int,
+    scaled_width: int,
+    scaled_height: int,
+    selectors: Optional[str],
+    format: str,
+    version: Optional[int],
+    timeout_ms: Optional[int],
+):
+    """Return async queue-oriented response for screenshot requests."""
+    selector_list = selectors.split(",") if selectors else []
+    imgname = build_image_name(
+        url,
+        selector_list,
+        width,
+        height,
+        scaled_width,
+        scaled_height,
+        format,
+        version,
+    )
+
+    if config.s3_client.file_exists(imgname):
+        if request_method == "HEAD":
+            return Response(headers=_image_headers(format), status_code=200)
+
+        return _json_no_cache_response(
+            {
+                "status": "exists",
+                "filename": imgname,
+                "result_url": f"/shot/{imgname}",
+            },
+            status_code=200,
+        )
+
+    queue = get_queue()
+    if queue.is_shot_queued_or_processing(
+        url,
+        width,
+        height,
+        selectors,
+        version,
+        scaled_width,
+        scaled_height,
+        format,
+    ):
+        job_id = queue.get_job_id_by_filename(imgname)
+        if request_method == "HEAD":
+            headers = _status_headers(format, "processing", job_id or "")
+            return Response(headers=headers, status_code=202)
+
+        return _json_no_cache_response(
+            {
+                "status": "processing",
+                "job_id": job_id,
+                "filename": imgname,
+                "result_url": f"/shot/{imgname}",
+            },
+            status_code=202,
+        )
+
+    job_id = queue.add_job(
+        url=url,
+        width=width,
+        height=height,
+        selectors=selectors,
+        format=format,
+        scaled_width=scaled_width,
+        scaled_height=scaled_height,
+        version=version,
+        timeout=timeout_ms,
+        priority=0,
+    )
+
+    if request_method == "HEAD":
+        headers = _status_headers(format, "queued", job_id)
+        return Response(headers=headers, status_code=202)
+
+    return _json_no_cache_response(
+        {
+            "status": "queued",
+            "job_id": job_id,
+            "filename": imgname,
+            "job_url": f"/job/{job_id}",
+            "result_url": f"/shot/{imgname}",
+            "message": "Screenshot queued for processing",
+        },
+        status_code=202,
+    )
+
+
+async def _get_blocking_shot_response(
+    request_method: str,
+    url: str,
+    width: int,
+    height: int,
+    scaled_width: int,
+    scaled_height: int,
+    selectors: Optional[str],
+    format: str,
+    version: Optional[int],
+    timeout_ms: Optional[int],
+    wait_ms: int,
+):
+    """Queue, wait for completion, and return image response."""
+    selector_list = selectors.split(",") if selectors else []
+
+    imgname = build_image_name(
+        url,
+        selector_list,
+        width,
+        height,
+        scaled_width,
+        scaled_height,
+        format,
+        version,
+    )
+
+    if config.s3_client.file_exists(imgname):
+        return await _serve_image(imgname, format, request_method)
+
+    queue = get_queue()
+    job_id = queue.get_job_id_by_filename(imgname)
+    if not job_id:
+        job_id = queue.add_job(
+            url=url,
+            width=width,
+            height=height,
+            selectors=selectors,
+            format=format,
+            scaled_width=scaled_width,
+            scaled_height=scaled_height,
+            version=version,
+            timeout=timeout_ms,
+            priority=0,
+        )
+
+    deadline = time.monotonic() + (wait_ms / 1000)
+    while time.monotonic() < deadline:
+        if config.s3_client.file_exists(imgname):
+            return await _serve_image(imgname, format, request_method)
+
+        job_data = queue.get_job(job_id)
+        if job_data and job_data.get("status") == "failed":
+            raise HTTPException(
+                status_code=500,
+                detail=job_data.get("error") or "Screenshot job failed",
+            )
+
+        await asyncio.sleep(0.5)
+
+    raise HTTPException(
+        status_code=504,
+        detail=f"Timed out waiting for screenshot after {wait_ms}ms",
     )
 
 
@@ -280,7 +473,7 @@ async def trigger_shot(
         format,
     ):
         job_id = queue.get_job_id_by_filename(imgname)
-        return JSONResponse(
+        return _json_no_cache_response(
             {
                 "status": "already_queued",
                 "job_id": job_id,
@@ -292,7 +485,7 @@ async def trigger_shot(
         )
 
     if config.s3_client.file_exists(imgname):
-        return JSONResponse(
+        return _json_no_cache_response(
             {
                 "status": "exists",
                 "message": "Screenshot already exists",
@@ -316,7 +509,7 @@ async def trigger_shot(
 
     console.log(f"Queued screenshot job {job_id} for {url}")
 
-    return JSONResponse(
+    return _json_no_cache_response(
         {
             "status": "queued",
             "job_id": job_id,
@@ -337,7 +530,7 @@ async def get_job_status(job_id: str):
     if not job_data:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    return JSONResponse(job_data)
+    return _json_no_cache_response(job_data)
 
 
 @app.get("/queue/stats")
@@ -345,7 +538,7 @@ async def get_queue_stats():
     """Get queue statistics"""
     queue = get_queue()
     stats = queue.get_queue_stats()
-    return JSONResponse(stats)
+    return _json_no_cache_response(stats)
 
 
 @app.api_route("/shot/blocking", methods=["GET", "HEAD"])
@@ -378,58 +571,62 @@ async def get_shot_blocking(
     height = height or 450
     scaled_height = int(scaled_height) if scaled_height else height
     scaled_width = int(scaled_width) if scaled_width else width
-    selector_list = selectors.split(",") if selectors else []
+    version = _parse_version(v)
+    timeout_ms = _parse_timeout(timeout)
+    return await _get_blocking_shot_response(
+        request_method=request.method,
+        url=url,
+        width=width,
+        height=height,
+        scaled_width=scaled_width,
+        scaled_height=scaled_height,
+        selectors=selectors,
+        format=format,
+        version=version,
+        timeout_ms=timeout_ms,
+        wait_ms=wait,
+    )
+
+
+@app.api_route("/shot/async", methods=["GET", "HEAD"])
+@app.api_route("/shot/async/", methods=["GET", "HEAD"])
+async def get_shot_async(
+    request: Request,
+    url: str = Query(...),
+    height: Optional[int] = 450,
+    width: Optional[int] = 800,
+    scaled_height: Optional[int | str] = None,
+    scaled_width: Optional[int | str] = None,
+    selectors: Optional[str] = None,
+    format: Optional[str] = None,
+    v: Optional[str] = Query(default=None),
+    timeout: Optional[str] = Query(default=None),
+):
+    """Return queue status JSON instead of blocking for image bytes."""
+    format = _normalize_format(format)
+
+    if not url.startswith("http"):
+        raise HTTPException(status_code=404, detail="url is not a url")
+
+    width = width or 800
+    height = height or 450
+    scaled_height = int(scaled_height) if scaled_height else height
+    scaled_width = int(scaled_width) if scaled_width else width
 
     version = _parse_version(v)
     timeout_ms = _parse_timeout(timeout)
 
-    imgname = build_image_name(
-        url,
-        selector_list,
-        width,
-        height,
-        scaled_width,
-        scaled_height,
-        format,
-        version,
-    )
-
-    if config.s3_client.file_exists(imgname):
-        return await _serve_image(imgname, format, request.method)
-
-    queue = get_queue()
-    job_id = queue.get_job_id_by_filename(imgname)
-    if not job_id:
-        job_id = queue.add_job(
-            url=url,
-            width=width,
-            height=height,
-            selectors=selectors,
-            format=format,
-            scaled_width=scaled_width,
-            scaled_height=scaled_height,
-            version=version,
-            timeout=timeout_ms,
-            priority=0,
-        )
-
-    deadline = time.monotonic() + (wait / 1000)
-    while time.monotonic() < deadline:
-        if config.s3_client.file_exists(imgname):
-            return await _serve_image(imgname, format, request.method)
-
-        job_data = queue.get_job(job_id)
-        if job_data and job_data.get("status") == "failed":
-            raise HTTPException(
-                status_code=500,
-                detail=job_data.get("error") or "Screenshot job failed",
-            )
-
-        await asyncio.sleep(0.5)
-
-    raise HTTPException(
-        status_code=504,
-        detail=f"Timed out waiting for screenshot after {wait}ms",
+    return await _get_async_shot_response(
+        request_method=request.method,
+        url=url,
+        width=width,
+        height=height,
+        scaled_width=scaled_width,
+        scaled_height=scaled_height,
+        selectors=selectors,
+        format=format,
+        version=version,
+        timeout_ms=timeout_ms,
     )
 
 
@@ -449,6 +646,8 @@ async def get_shot(
     format: Optional[str] = None,
     v: Optional[str] = Query(default=None),
     timeout: Optional[str] = Query(default=None),
+    wait: int = Query(default=30000, description="Max wait time in milliseconds"),
+    mode: Optional[str] = Query(default=None),
 ):
     format = _normalize_format(format, filename)
 
@@ -464,7 +663,6 @@ async def get_shot(
     # Ensure width and height are not None for take_screenshot
     width = width or 800
     height = height or 450
-    selector_list = selectors.split(",") if selectors else []
 
     # Ensure scaled dimensions are integers (not None)
     scaled_height = int(scaled_height) if scaled_height else height
@@ -479,6 +677,7 @@ async def get_shot(
     # Handle HTMX requests (only for GET)
     hx_request_header = request.headers.get("hx-request")
     if hx_request_header and request.method == "GET":
+        selector_list = selectors.split(",") if selectors else []
         imgname = build_image_name(
             url,
             selector_list,
@@ -531,97 +730,96 @@ async def get_shot(
             },
         )
 
-    imgname = build_image_name(
-        url,
-        selector_list,
-        width,
-        height,
-        scaled_width,
-        scaled_height,
-        format,
-        version,
-    )
-
-    if config.s3_client.file_exists(imgname):
-        if request.method == "HEAD":
-            return Response(headers=_image_headers(format), status_code=200)
-
-        return JSONResponse(
-            {
-                "status": "exists",
-                "filename": imgname,
-                "result_url": f"/shot/{imgname}",
-            },
-            status_code=200,
+    if mode == "async" or request.method == "HEAD":
+        return await _get_async_shot_response(
+            request_method=request.method,
+            url=url,
+            width=width,
+            height=height,
+            scaled_width=scaled_width,
+            scaled_height=scaled_height,
+            selectors=selectors,
+            format=format,
+            version=version,
+            timeout_ms=timeout_ms,
         )
 
-    # Check if shot is already queued or processing
-    queue = get_queue()
-    if queue.is_shot_queued_or_processing(
-        url,
-        width,
-        height,
-        selectors,
-        version,
-        scaled_width,
-        scaled_height,
-        format,
-    ):
-        job_id = queue.get_job_id_by_filename(imgname)
-        if request.method == "HEAD":
-            # Return headers indicating shot is being processed
-            headers = {
-                "Cache-Control": "no-cache",
-                "Content-Type": f"image/{format}",
-                "Access-Control-Allow-Origin": "*",
-                "Cross-Origin-Resource-Policy": "cross-origin",
-                "X-Screenshot-Status": "processing",
-                "X-Job-Id": job_id or "",
-            }
-            return Response(headers=headers, status_code=202)  # Accepted
-        else:
-            return JSONResponse(
-                {
-                    "status": "processing",
-                    "job_id": job_id,
-                    "filename": imgname,
-                    "result_url": f"/shot/{imgname}",
-                },
-                status_code=202,
-            )
+    if wait <= 0:
+        raise HTTPException(status_code=400, detail="wait must be a positive integer")
+    if wait > 120000:
+        raise HTTPException(status_code=400, detail="wait cannot exceed 120000 ms")
 
-    job_id = queue.add_job(
+    return await _get_blocking_shot_response(
+        request_method=request.method,
         url=url,
         width=width,
         height=height,
-        selectors=selectors,
-        format=format,
         scaled_width=scaled_width,
         scaled_height=scaled_height,
+        selectors=selectors,
+        format=format,
         version=version,
-        timeout=timeout_ms,
-        priority=0,
+        timeout_ms=timeout_ms,
+        wait_ms=wait,
     )
 
-    if request.method == "HEAD":
-        headers = {
-            "Cache-Control": "no-cache",
-            "Content-Type": f"image/{format}",
-            "Access-Control-Allow-Origin": "*",
-            "Cross-Origin-Resource-Policy": "cross-origin",
-            "X-Screenshot-Status": "queued",
-            "X-Job-Id": job_id,
-        }
-        return Response(headers=headers, status_code=202)
 
-    return JSONResponse(
+@app.delete("/shot")
+@app.delete("/shot/")
+@app.delete("/shot/{filename}")
+@app.delete("/shot/{filename}/")
+async def delete_shot(
+    filename: Optional[str] = None,
+    url: Optional[str] = Query(default=None),
+    height: Optional[int] = 450,
+    width: Optional[int] = 800,
+    scaled_height: Optional[int | str] = None,
+    scaled_width: Optional[int | str] = None,
+    selectors: Optional[str] = None,
+    format: Optional[str] = None,
+    v: Optional[str] = Query(default=None),
+):
+    """Delete an existing screenshot object from storage."""
+    resolved_filename = filename
+
+    if not resolved_filename:
+        if not url:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either filename path or url query parameters",
+            )
+        if not url.startswith("http"):
+            raise HTTPException(status_code=404, detail="url is not a url")
+
+        normalized_format = _normalize_format(format)
+        version = _parse_version(v)
+
+        width = width or 800
+        height = height or 450
+        scaled_height = int(scaled_height) if scaled_height else height
+        scaled_width = int(scaled_width) if scaled_width else width
+        selector_list = selectors.split(",") if selectors else []
+
+        resolved_filename = build_image_name(
+            url,
+            selector_list,
+            width,
+            height,
+            scaled_width,
+            scaled_height,
+            normalized_format,
+            version,
+        )
+    else:
+        _normalize_format(format=None, filename=resolved_filename)
+
+    if not config.s3_client.file_exists(resolved_filename):
+        raise HTTPException(status_code=404, detail="Shot not found")
+
+    await config.s3_client.delete_file(resolved_filename)
+    return _json_no_cache_response(
         {
-            "status": "queued",
-            "job_id": job_id,
-            "filename": imgname,
-            "job_url": f"/job/{job_id}",
-            "result_url": f"/shot/{imgname}",
-            "message": "Screenshot queued for processing",
-        },
-        status_code=202,
+            "status": "deleted",
+            "filename": resolved_filename,
+        }
     )

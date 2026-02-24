@@ -1,3 +1,15 @@
+## 0.0.33
+
+- changed: `GET /shot?url=...` now defaults to blocking image responses for legacy OG/image consumers
+- added: `GET /shot/async` and `HEAD /shot/async` for explicit async JSON queue status behavior
+- added: `mode=async` query option on `/shot` to force async JSON behavior when needed
+- added: `DELETE /shot/{filename}` and `DELETE /shot?url=...` to remove existing generated shots from object storage
+- added: richer `/queue/stats` metrics including average processing duration, success rate, queue ages, and completions in the last hour
+- changed: Redis queue stats now use Redis-backed aggregate counters for faster stats responses
+- changed: JSON/status endpoints now send explicit no-store cache headers so Cloudflare only caches image responses
+- changed: image responses now include CDN-friendly cache headers (`s-maxage`, `immutable`) for edge caching
+- improved: screenshot capture now waits for visible videos to have actual frame data before capture to reduce blank clips
+
 ## 0.0.32
 
 - fix: wait for visible media before capture to reduce incomplete screenshots
