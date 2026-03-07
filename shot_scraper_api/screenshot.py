@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Any, Awaitable, cast
 
 from fastapi import HTTPException
 from pyppeteer import launch
@@ -60,14 +60,23 @@ async def take_screenshot(
 
         normalized_theme = (theme or "").strip().lower()
         if normalized_theme in ["dark", "light"]:
-            await page.emulateMediaFeatures(
-                [
-                    {
-                        "name": "prefers-color-scheme",
-                        "value": normalized_theme,
-                    }
-                ]
-            )
+            page_any: Any = page
+            emulate_media_features = getattr(page_any, "emulateMediaFeatures", None)
+            if callable(emulate_media_features):
+                emulate_result = emulate_media_features(
+                    [
+                        {
+                            "name": "prefers-color-scheme",
+                            "value": normalized_theme,
+                        }
+                    ]
+                )
+                if asyncio.iscoroutine(emulate_result):
+                    await cast(Awaitable[Any], emulate_result)
+            else:
+                console.log(
+                    "emulateMediaFeatures unavailable in this pyppeteer build; using CSS fallback"
+                )
 
         # Navigate to URL with custom timeout
         page_timeout = timeout_ms if timeout_ms else 30000
@@ -91,55 +100,7 @@ async def take_screenshot(
             except:
                 console.log(f"Selector {selector} not found")
 
-        media_wait_timeout = min(timeout_ms, 10000) if timeout_ms else 10000
-
-        # Wait for visible images and fonts to settle before capture.
-        try:
-            await page.waitForFunction(
-                """
-                () => {
-                    if (!document.fonts || !document.fonts.ready) {
-                        return true;
-                    }
-                    return document.fonts.status === 'loaded';
-                }
-                """,
-                {"timeout": media_wait_timeout},
-            )
-        except Exception as e:
-            console.log(f"Font readiness wait skipped: {e}")
-
-        try:
-            await page.waitForFunction(
-                """
-                () => {
-                    const visibleImages = Array.from(document.images).filter((img) => {
-                        const rect = img.getBoundingClientRect();
-                        const style = window.getComputedStyle(img);
-                        const onScreen =
-                            rect.bottom > 0 &&
-                            rect.right > 0 &&
-                            rect.top < window.innerHeight &&
-                            rect.left < window.innerWidth;
-                        const visible =
-                            rect.width > 0 &&
-                            rect.height > 0 &&
-                            style.display !== 'none' &&
-                            style.visibility !== 'hidden';
-                        return onScreen && visible;
-                    });
-
-                    if (visibleImages.length === 0) {
-                        return true;
-                    }
-
-                    return visibleImages.every((img) => img.complete);
-                }
-                """,
-                {"timeout": media_wait_timeout},
-            )
-        except Exception as e:
-            console.log(f"Visible image wait skipped: {e}")
+        media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
 
         # Enhanced video handling
         try:

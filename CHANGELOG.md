@@ -1,3 +1,7 @@
+## 0.0.35
+
+- reduced media wait time.
+
 ## 0.0.34
 
 - added: `theme` query parameter (`light` or `dark`) to `/shot`, `/shot/async`, `/shot/blocking`, `/trigger/shot`, and `DELETE /shot` filename generation for deterministic theme-specific cache keys
