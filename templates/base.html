@@ -20,8 +20,13 @@
             </head>
 
             <body class="mx-auto h-screen w-screen bg-zinc-800">
-                <div class="flex flex-col h-screen w-screen justify-between">
-                    <nav></nav>
+                <div class="flex flex-col min-h-screen w-screen justify-between">
+                    <nav class="site-nav">
+                        <a href="/" class="site-nav__brand">shots</a>
+                        <div class="site-nav__links">
+                            <a href="/dashboard/urls">url dashboard</a>
+                        </div>
+                    </nav>
                     {% block content %}
                     {% endblock %}
                     <footer class="m-5  text-center text-neutral-400 justify-self-end ">

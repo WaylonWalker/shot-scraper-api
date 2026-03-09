@@ -205,6 +205,37 @@ def _json_no_cache_response(
     return JSONResponse(content, status_code=status_code, headers=_no_cache_headers())
 
 
+def _build_requested_filename(
+    url: str,
+    width: int,
+    height: int,
+    scaled_width: int,
+    scaled_height: int,
+    selectors: Optional[str],
+    format: str,
+    version: Optional[int],
+    theme: Optional[str],
+) -> str:
+    """Build the storage filename for a screenshot request."""
+    selector_list = selectors.split(",") if selectors else []
+    return build_image_name(
+        url,
+        selector_list,
+        width,
+        height,
+        scaled_width,
+        scaled_height,
+        format,
+        version,
+        theme,
+    )
+
+
+def _record_url_request(url: str, filename: str, method: str) -> None:
+    """Persist source URL request stats for later reporting."""
+    get_queue().record_url_request(url=url, filename=filename, method=method)
+
+
 async def _serve_image(filename: str, format: str, method: str):
     """Serve image from object storage."""
     if method == "HEAD":
@@ -232,18 +263,18 @@ async def _get_async_shot_response(
     theme: Optional[str],
 ):
     """Return async queue-oriented response for screenshot requests."""
-    selector_list = selectors.split(",") if selectors else []
-    imgname = build_image_name(
+    imgname = _build_requested_filename(
         url,
-        selector_list,
         width,
         height,
         scaled_width,
         scaled_height,
+        selectors,
         format,
         version,
         theme,
     )
+    _record_url_request(url=url, filename=imgname, method=request_method)
 
     if config.s3_client.file_exists(imgname):
         if request_method == "HEAD":
@@ -331,19 +362,18 @@ async def _get_blocking_shot_response(
     wait_ms: int,
 ):
     """Queue, wait for completion, and return image response."""
-    selector_list = selectors.split(",") if selectors else []
-
-    imgname = build_image_name(
+    imgname = _build_requested_filename(
         url,
-        selector_list,
         width,
         height,
         scaled_width,
         scaled_height,
+        selectors,
         format,
         version,
         theme,
     )
+    _record_url_request(url=url, filename=imgname, method=request_method)
 
     if config.s3_client.file_exists(imgname):
         return await _serve_image(imgname, format, request_method)
@@ -392,6 +422,42 @@ def get(request: Request):
         {
             "request": request,
             "env": os.environ,
+        },
+    )
+
+
+@app.get("/dashboard/urls")
+def get_url_dashboard(request: Request):
+    """Render a small dashboard for tracked URL request stats."""
+    queue = get_queue()
+    stats = queue.get_url_stats()
+    queue_stats = queue.get_queue_stats()
+    now = time.time()
+    active_jobs = []
+    for job in queue.get_active_jobs():
+        created_at = job.get("created_at")
+        age_seconds = 0.0
+        if isinstance(created_at, (int, float)):
+            age_seconds = round(max(0.0, now - created_at), 1)
+        active_jobs.append(
+            {
+                **job,
+                "age_seconds": age_seconds,
+            }
+        )
+    storage = {
+        "bucket": config.aws_bucket_name or "(not set)",
+        "endpoint": config.aws_endpoint_url or "AWS S3 default",
+        "queue_backend": (config.queue_backend or "auto").lower(),
+    }
+    return templates.TemplateResponse(
+        "url_dashboard.html",
+        {
+            "request": request,
+            "stats": stats,
+            "queue_stats": queue_stats,
+            "active_jobs": active_jobs,
+            "storage": storage,
         },
     )
 
@@ -476,18 +542,18 @@ async def trigger_shot(
         )
 
     # Check if already exists in S3
-    selector_list = selectors.split(",") if selectors else []
-    imgname = build_image_name(
+    imgname = _build_requested_filename(
         url,
-        selector_list,
         width,
         height,
         scaled_width or width,
         scaled_height or height,
+        selectors,
         format,
         version,
         parsed_theme,
     )
+    _record_url_request(url=url, filename=imgname, method=request.method)
 
     # Check if already queued or processing
     queue = get_queue()
@@ -570,6 +636,14 @@ async def get_queue_stats():
     queue = get_queue()
     stats = queue.get_queue_stats()
     return _json_no_cache_response(stats)
+
+
+@app.get("/url/stats")
+@app.get("/urls/stats")
+async def get_url_stats():
+    """List tracked source URLs and request counts."""
+    queue = get_queue()
+    return _json_no_cache_response(queue.get_url_stats())
 
 
 @app.api_route("/shot/blocking", methods=["GET", "HEAD"])
@@ -716,18 +790,18 @@ async def get_shot(
     # Handle HTMX requests (only for GET)
     hx_request_header = request.headers.get("hx-request")
     if hx_request_header and request.method == "GET":
-        selector_list = selectors.split(",") if selectors else []
-        imgname = build_image_name(
+        imgname = _build_requested_filename(
             url,
-            selector_list,
             width,
             height,
             scaled_width,
             scaled_height,
+            selectors,
             format,
             version,
             parsed_theme,
         )
+        _record_url_request(url=url, filename=imgname, method=request.method)
         print(
             f"height: {height}, width: {width}, scaled_height: {scaled_height}, scaled_width: {scaled_width}, imgname: {imgname}"
         )

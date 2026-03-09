@@ -143,8 +143,48 @@ class QueueBase:
     def get_queue_stats(self) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def record_url_request(self, url: str, filename: str, method: str) -> None:
+        raise NotImplementedError
+
+    def get_url_stats(self) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def get_active_jobs(self) -> List[Dict[str, Any]]:
+        raise NotImplementedError
+
     def cleanup_old_jobs(self, max_age_hours: int = 24):
         raise NotImplementedError
+
+
+def _build_url_stats(url_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build aggregate URL request stats from stored rows."""
+    sorted_rows = sorted(
+        url_rows,
+        key=lambda row: (
+            -int(row.get("request_count", 0)),
+            -float(row.get("last_requested_at", 0.0)),
+            str(row.get("url", "")),
+        ),
+    )
+    return {
+        "total_urls": len(sorted_rows),
+        "total_requests": sum(int(row.get("request_count", 0)) for row in sorted_rows),
+        "urls": sorted_rows,
+    }
+
+
+def _build_active_jobs(job_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return queued and processing jobs ordered by activity."""
+    active_statuses = {JobStatus.QUEUED.value, JobStatus.PROCESSING.value}
+    rows = [row for row in job_rows if row.get("status") in active_statuses]
+    rows.sort(
+        key=lambda row: (
+            0 if row.get("status") == JobStatus.PROCESSING.value else 1,
+            -int(row.get("priority", 0)),
+            float(row.get("created_at", 0.0)),
+        )
+    )
+    return rows
 
 
 class ScreenshotQueue(QueueBase):
@@ -152,6 +192,7 @@ class ScreenshotQueue(QueueBase):
         self.cache = diskcache.Cache(cache_dir)
         self.job_counter_key = "job_counter"
         self.job_index_key = "job_by_filename"
+        self.url_stats_key = "url_request_stats"
 
     def _get_next_job_id(self) -> str:
         """Get next job ID"""
@@ -356,6 +397,46 @@ class ScreenshotQueue(QueueBase):
 
         return _build_job_stats(jobs)
 
+    def get_active_jobs(self) -> List[Dict[str, Any]]:
+        """List queued and processing jobs."""
+        jobs: List[Dict[str, Any]] = []
+        for key in list(self.cache.iterkeys()):
+            if isinstance(key, str) and key.startswith("job:"):
+                job_data = self.cache.get(key)
+                if job_data and isinstance(job_data, dict):
+                    jobs.append(job_data)
+        return _build_active_jobs(jobs)
+
+    def record_url_request(self, url: str, filename: str, method: str) -> None:
+        """Record a request for a source URL and generated filename."""
+        now = time.time()
+        url_stats_raw = self.cache.get(self.url_stats_key)
+        url_stats = url_stats_raw if isinstance(url_stats_raw, dict) else {}
+        row = url_stats.get(url, {})
+        filenames = row.get("filenames", [])
+        if filename not in filenames:
+            filenames.append(filename)
+
+        method_counts_raw = row.get("method_counts", {})
+        method_counts = method_counts_raw if isinstance(method_counts_raw, dict) else {}
+        method_counts[method] = int(method_counts.get(method, 0)) + 1
+
+        url_stats[url] = {
+            "url": url,
+            "request_count": int(row.get("request_count", 0)) + 1,
+            "filenames": sorted(filenames),
+            "first_requested_at": float(row.get("first_requested_at", now)),
+            "last_requested_at": now,
+            "method_counts": method_counts,
+        }
+        self.cache.set(self.url_stats_key, url_stats)
+
+    def get_url_stats(self) -> Dict[str, Any]:
+        """List tracked URL request counts and generated files."""
+        url_stats_raw = self.cache.get(self.url_stats_key)
+        url_stats = url_stats_raw if isinstance(url_stats_raw, dict) else {}
+        return _build_url_stats(list(url_stats.values()))
+
     def cleanup_old_jobs(self, max_age_hours: int = 24):
         """Clean up old completed/failed jobs"""
         cutoff_time = time.time() - (max_age_hours * 3600)
@@ -393,6 +474,7 @@ class RedisQueue(QueueBase):
         self.job_index_prefix = f"{namespace}:job_by_filename:"
         self.stats_key = f"{namespace}:stats"
         self.completed_timestamps_key = f"{namespace}:completed_timestamps"
+        self.url_stats_key = f"{namespace}:url_request_stats"
 
     def _rebuild_stats(self) -> None:
         """Rebuild aggregate stats from stored jobs."""
@@ -719,6 +801,46 @@ class RedisQueue(QueueBase):
             "success_rate_percent": success_rate,
             "completed_last_hour": int(completed_last_hour),
         }
+
+    def record_url_request(self, url: str, filename: str, method: str) -> None:
+        """Record a request for a source URL and generated filename."""
+        now = time.time()
+        existing = self.redis.hget(self.url_stats_key, url)
+        row = json.loads(existing) if existing else {}
+
+        filenames = row.get("filenames", [])
+        if filename not in filenames:
+            filenames.append(filename)
+
+        method_counts_raw = row.get("method_counts", {})
+        method_counts = method_counts_raw if isinstance(method_counts_raw, dict) else {}
+        method_counts[method] = int(method_counts.get(method, 0)) + 1
+
+        updated = {
+            "url": url,
+            "request_count": int(row.get("request_count", 0)) + 1,
+            "filenames": sorted(filenames),
+            "first_requested_at": float(row.get("first_requested_at", now)),
+            "last_requested_at": now,
+            "method_counts": method_counts,
+        }
+        self.redis.hset(self.url_stats_key, url, json.dumps(updated))
+
+    def get_url_stats(self) -> Dict[str, Any]:
+        """List tracked URL request counts and generated files."""
+        raw = self.redis.hgetall(self.url_stats_key)
+        rows = [json.loads(value) for value in raw.values()]
+        return _build_url_stats(rows)
+
+    def get_active_jobs(self) -> List[Dict[str, Any]]:
+        """List queued and processing jobs."""
+        jobs: List[Dict[str, Any]] = []
+        for key in self.redis.scan_iter(match=f"{self.job_key_prefix}*"):
+            job_data = self.redis.get(key)
+            if not job_data:
+                continue
+            jobs.append(json.loads(job_data))
+        return _build_active_jobs(jobs)
 
     def cleanup_old_jobs(self, max_age_hours: int = 24):
         cutoff_time = time.time() - (max_age_hours * 3600)
