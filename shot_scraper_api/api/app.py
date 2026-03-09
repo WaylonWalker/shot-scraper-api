@@ -426,6 +426,8 @@ def get(request: Request):
     )
 
 
+@app.get("/dashboard")
+@app.get("/dashboard/")
 @app.get("/dashboard/urls")
 def get_url_dashboard(request: Request):
     """Render a small dashboard for tracked URL request stats."""

@@ -181,16 +181,18 @@ def test_url_dashboard_renders_tracked_stats(monkeypatch):
 
     with TestClient(app) as client:
         response = client.get("/dashboard/urls")
+        canonical = client.get("/dashboard")
 
     assert response.status_code == 200
+    assert canonical.status_code == 200
     assert "URL dashboard" in response.text
-    assert "Storage" in response.text
+    assert "Environment" in response.text
     assert "Bucket" in response.text
     assert "(not set)" in response.text
     assert "AWS S3 default" in response.text
     assert "Tracked URLs" in response.text
     assert "Total requests" in response.text
-    assert "Queue snapshot" in response.text
+    assert "Queued avg age" in response.text
     assert "In flight" in response.text
     assert "job-processing" in response.text
     assert "/job/job-processing" in response.text

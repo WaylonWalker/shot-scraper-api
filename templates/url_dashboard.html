@@ -7,184 +7,175 @@
 {% endblock %}
 {% block content %}
 <main class="dashboard-shell">
-    <section class="dashboard-panel dashboard-panel--summary">
-        <div class="dashboard-panel-header">
-            <h2>Storage</h2>
+    <header class="dashboard-header">
+        <div>
+            <h1>URL dashboard</h1>
+            <p>Queue status and URL history.</p>
         </div>
-        <dl class="dashboard-meta-grid">
+        <p class="dashboard-refresh-note">Auto-refreshes every 5 seconds.</p>
+    </header>
+
+    <section class="dashboard-summary" aria-label="Summary">
+        <dl class="dashboard-summary-grid">
             <div>
-                <dt>Bucket</dt>
-                <dd>{{ storage.bucket }}</dd>
+                <dt>Tracked URLs</dt>
+                <dd class="dashboard-number">{{ stats.total_urls }}</dd>
             </div>
             <div>
-                <dt>Endpoint</dt>
-                <dd>{{ storage.endpoint }}</dd>
+                <dt>Total requests</dt>
+                <dd class="dashboard-number">{{ stats.total_requests }}</dd>
             </div>
             <div>
-                <dt>Queue backend</dt>
-                <dd>{{ storage.queue_backend }}</dd>
+                <dt>Queued now</dt>
+                <dd class="dashboard-number">{{ queue_stats.queued }}</dd>
+            </div>
+            <div>
+                <dt>Processing now</dt>
+                <dd class="dashboard-number">{{ queue_stats.processing }}</dd>
             </div>
         </dl>
     </section>
 
-    <section class="dashboard-hero">
-        <div>
-            <p class="dashboard-kicker">Request tracking</p>
-            <h1 class="dashboard-title">URL dashboard</h1>
-            <p class="dashboard-subtitle">A quick view of which pages are being requested, how busy the queue is, and what is still in flight.</p>
+    <section class="dashboard-layout">
+        <aside class="dashboard-sidebar">
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>Environment</h2>
+                </div>
+                <dl class="dashboard-meta-list">
+                    <div>
+                        <dt>Bucket</dt>
+                        <dd class="dashboard-code">{{ storage.bucket }}</dd>
+                    </div>
+                    <div>
+                        <dt>Endpoint</dt>
+                        <dd class="dashboard-code">{{ storage.endpoint }}</dd>
+                    </div>
+                    <div>
+                        <dt>Queue backend</dt>
+                        <dd class="dashboard-code">{{ storage.queue_backend }}</dd>
+                    </div>
+                    <div>
+                        <dt>Queued</dt>
+                        <dd>{{ queue_stats.queued }}</dd>
+                    </div>
+                    <div>
+                        <dt>Processing</dt>
+                        <dd>{{ queue_stats.processing }}</dd>
+                    </div>
+                    <div>
+                        <dt>Completed</dt>
+                        <dd>{{ queue_stats.completed }}</dd>
+                    </div>
+                    <div>
+                        <dt>Failed</dt>
+                        <dd>{{ queue_stats.failed }}</dd>
+                    </div>
+                    <div>
+                        <dt>Queued avg age</dt>
+                        <dd>{{ queue_stats.queued_avg_age_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Oldest queued</dt>
+                        <dd>{{ queue_stats.queued_oldest_age_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Processing avg age</dt>
+                        <dd>{{ queue_stats.processing_avg_age_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Success rate</dt>
+                        <dd>{{ queue_stats.success_rate_percent }}%</dd>
+                    </div>
+                </dl>
+            </section>
+        </aside>
+
+        <div class="dashboard-main">
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>In flight</h2>
+                    <p>{{ active_jobs|length }} active jobs</p>
+                </div>
+
+                {% if active_jobs %}
+                <div class="dashboard-table-wrap">
+                    <table class="dashboard-table dashboard-table--compact">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Job</th>
+                                <th>Age</th>
+                                <th>Priority</th>
+                                <th>URL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for job in active_jobs %}
+                            <tr>
+                                <td class="dashboard-status-text dashboard-status-text--{{ job.status }}">{{ job.status }}</td>
+                                <td><a href="/job/{{ job.job_id }}" class="dashboard-job-link dashboard-code">{{ job.job_id }}</a></td>
+                                <td>{{ job.age_seconds }}s</td>
+                                <td>{{ job.priority }}</td>
+                                <td class="dashboard-url-cell"><a href="{{ job.url }}" target="_blank" rel="noreferrer" title="{{ job.url }}">{{ job.url }}</a></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="dashboard-empty">No queued or processing jobs right now.</p>
+                {% endif %}
+            </section>
+
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>Top URLs</h2>
+                    <p>{{ stats.urls|length }} rows</p>
+                </div>
+
+                {% if stats.urls %}
+                <div class="dashboard-table-wrap">
+                    <table class="dashboard-table">
+                        <thead>
+                            <tr>
+                                <th>URL</th>
+                                <th>Requests</th>
+                                <th>Methods</th>
+                                <th>Files</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stats.urls %}
+                            <tr>
+                                <td class="dashboard-url-cell">
+                                    <a href="{{ row.url }}" target="_blank" rel="noreferrer" title="{{ row.url }}">{{ row.url }}</a>
+                                </td>
+                                <td>{{ row.request_count }}</td>
+                                <td>
+                                    <div class="dashboard-inline-list">
+                                        {% for method, count in row.method_counts.items() %}
+                                        <span class="dashboard-method">{{ method }} {{ count }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="dashboard-inline-list">
+                                        {% for filename in row.filenames %}
+                                        <a href="/shot/{{ filename }}" class="dashboard-file-link">{{ filename }}</a>
+                                        {% endfor %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="dashboard-empty">No URL requests have been tracked yet.</p>
+                {% endif %}
+            </section>
         </div>
-        <div class="dashboard-metrics">
-            <article class="dashboard-metric-card">
-                <span class="dashboard-metric-label">Tracked URLs</span>
-                <strong class="dashboard-metric-value">{{ stats.total_urls }}</strong>
-            </article>
-            <article class="dashboard-metric-card">
-                <span class="dashboard-metric-label">Total requests</span>
-                <strong class="dashboard-metric-value">{{ stats.total_requests }}</strong>
-            </article>
-            <article class="dashboard-metric-card">
-                <span class="dashboard-metric-label">Queued now</span>
-                <strong class="dashboard-metric-value">{{ queue_stats.queued }}</strong>
-            </article>
-            <article class="dashboard-metric-card">
-                <span class="dashboard-metric-label">Processing now</span>
-                <strong class="dashboard-metric-value">{{ queue_stats.processing }}</strong>
-            </article>
-        </div>
-    </section>
-
-    <section class="dashboard-grid">
-        <article class="dashboard-panel">
-            <div class="dashboard-panel-header">
-                <h2>Queue snapshot</h2>
-                <span>Live aggregate</span>
-            </div>
-            <dl class="dashboard-stat-grid">
-                <div>
-                    <dt>Queued</dt>
-                    <dd>{{ queue_stats.queued }}</dd>
-                </div>
-                <div>
-                    <dt>Processing</dt>
-                    <dd>{{ queue_stats.processing }}</dd>
-                </div>
-                <div>
-                    <dt>Completed</dt>
-                    <dd>{{ queue_stats.completed }}</dd>
-                </div>
-                <div>
-                    <dt>Failed</dt>
-                    <dd>{{ queue_stats.failed }}</dd>
-                </div>
-                <div>
-                    <dt>Queued avg age</dt>
-                    <dd>{{ queue_stats.queued_avg_age_seconds }}s</dd>
-                </div>
-                <div>
-                    <dt>Oldest queued</dt>
-                    <dd>{{ queue_stats.queued_oldest_age_seconds }}s</dd>
-                </div>
-                <div>
-                    <dt>Processing avg age</dt>
-                    <dd>{{ queue_stats.processing_avg_age_seconds }}s</dd>
-                </div>
-                <div>
-                    <dt>Success rate</dt>
-                    <dd>{{ queue_stats.success_rate_percent }}%</dd>
-                </div>
-            </dl>
-        </article>
-
-        <article class="dashboard-panel">
-            <div class="dashboard-panel-header">
-                <h2>In flight</h2>
-                <span>{{ active_jobs|length }} active jobs</span>
-            </div>
-
-            {% if active_jobs %}
-            <div class="dashboard-table-wrap">
-                <table class="dashboard-table dashboard-table--compact">
-                    <thead>
-                        <tr>
-                            <th>Status</th>
-                            <th>Job</th>
-                            <th>Age</th>
-                            <th>Priority</th>
-                            <th>URL</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for job in active_jobs %}
-                        <tr>
-                            <td><span class="dashboard-badge dashboard-badge--{{ job.status }}">{{ job.status }}</span></td>
-                            <td><a href="/job/{{ job.job_id }}" class="dashboard-job-link">{{ job.job_id }}</a></td>
-                            <td>{{ job.age_seconds }}s</td>
-                            <td>{{ job.priority }}</td>
-                            <td class="dashboard-url-cell"><a href="{{ job.url }}" target="_blank" rel="noreferrer" title="{{ job.url }}">{{ job.url }}</a></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="dashboard-empty">
-                <p>No queued or processing jobs right now.</p>
-            </div>
-            {% endif %}
-        </article>
-    </section>
-
-    <p class="dashboard-refresh-note">Auto-refreshes every 5 seconds.</p>
-
-    <section class="dashboard-panel">
-        <div class="dashboard-panel-header">
-            <h2>Top URLs</h2>
-            <span>{{ stats.urls|length }} rows</span>
-        </div>
-
-        {% if stats.urls %}
-        <div class="dashboard-table-wrap">
-            <table class="dashboard-table">
-                <thead>
-                    <tr>
-                        <th>URL</th>
-                        <th>Requests</th>
-                        <th>Methods</th>
-                        <th>Files</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in stats.urls %}
-                    <tr>
-                        <td class="dashboard-url-cell">
-                            <a href="{{ row.url }}" target="_blank" rel="noreferrer" title="{{ row.url }}">{{ row.url }}</a>
-                        </td>
-                        <td>{{ row.request_count }}</td>
-                        <td>
-                            <div class="dashboard-badges">
-                                {% for method, count in row.method_counts.items() %}
-                                <span class="dashboard-badge">{{ method }} {{ count }}</span>
-                                {% endfor %}
-                            </div>
-                        </td>
-                        <td>
-                            <div class="dashboard-files">
-                                {% for filename in row.filenames %}
-                                <a href="/shot/{{ filename }}">{{ filename }}</a>
-                                {% endfor %}
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="dashboard-empty">
-            <p>No URL requests have been tracked yet.</p>
-            <a href="/" class="dashboard-link">Create your first shot</a>
-        </div>
-        {% endif %}
     </section>
 </main>
 {% endblock %}
