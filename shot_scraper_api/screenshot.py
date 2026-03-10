@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import os
 from pathlib import Path
 from typing import Optional, List, Any, Awaitable, cast
 
@@ -9,6 +8,83 @@ from pyppeteer import launch
 
 from shot_scraper_api.config import config
 from shot_scraper_api.console import console
+from shot_scraper_api.s3 import LocalStorageClient
+
+
+_browser: Any = None
+_browser_lock = asyncio.Lock()
+_render_limiter: asyncio.Semaphore | None = None
+_render_limiter_size: int | None = None
+_postprocess_limiter: asyncio.Semaphore | None = None
+_postprocess_limiter_size: int | None = None
+
+
+def _concurrency_limit(value: Optional[int]) -> int:
+    if isinstance(value, int) and value > 0:
+        return value
+    return max(1, int(config.queue_processor_concurrency))
+
+
+def _get_render_limiter() -> asyncio.Semaphore:
+    global _render_limiter, _render_limiter_size
+    size = _concurrency_limit(config.render_concurrency)
+    if _render_limiter is None or _render_limiter_size != size:
+        _render_limiter = asyncio.Semaphore(size)
+        _render_limiter_size = size
+    return _render_limiter
+
+
+def _get_postprocess_limiter() -> asyncio.Semaphore:
+    global _postprocess_limiter, _postprocess_limiter_size
+    size = _concurrency_limit(config.postprocess_concurrency)
+    if _postprocess_limiter is None or _postprocess_limiter_size != size:
+        _postprocess_limiter = asyncio.Semaphore(size)
+        _postprocess_limiter_size = size
+    return _postprocess_limiter
+
+
+def reset_stage_limiters() -> None:
+    global _render_limiter, _render_limiter_size
+    global _postprocess_limiter, _postprocess_limiter_size
+    _render_limiter = None
+    _render_limiter_size = None
+    _postprocess_limiter = None
+    _postprocess_limiter_size = None
+
+
+async def _launch_browser() -> Any:
+    return await launch(
+        args=[
+            "--no-sandbox",
+            "--autoplay-policy=no-user-gesture-required",
+            "--mute-audio",
+        ]
+    )
+
+
+async def get_browser() -> Any:
+    """Get or create the shared browser instance."""
+    global _browser
+    async with _browser_lock:
+        browser = _browser
+        is_connected = getattr(browser, "isConnected", None) if browser else None
+        if browser is None or (callable(is_connected) and not is_connected()):
+            _browser = await _launch_browser()
+        return _browser
+
+
+async def warm_browser() -> None:
+    """Launch the shared browser ahead of time."""
+    await get_browser()
+
+
+async def close_browser() -> None:
+    """Close the shared browser instance if one exists."""
+    global _browser
+    async with _browser_lock:
+        if _browser is not None:
+            await _browser.close()
+            _browser = None
 
 
 def build_image_name(
@@ -42,196 +118,207 @@ async def take_screenshot(
     output: str,
     timeout_ms: Optional[int] = None,
     theme: Optional[str] = None,
+    capture_format: Optional[str] = None,
 ):
     """Take a screenshot of a webpage"""
-    try:
-        # Launch browser
-        browser = await launch(
-            args=[
-                "--no-sandbox",
-                "--autoplay-policy=no-user-gesture-required",
-                "--mute-audio",
-            ]
-        )
-        page = await browser.newPage()
+    page = None
+    async with _get_render_limiter():
+        try:
+            browser = await get_browser()
+            page = await browser.newPage()
 
-        # Set viewport
-        await page.setViewport({"width": width, "height": height})
+            # Set viewport
+            await page.setViewport({"width": width, "height": height})
 
-        normalized_theme = (theme or "").strip().lower()
-        if normalized_theme in ["dark", "light"]:
-            page_any: Any = page
-            emulate_media_features = getattr(page_any, "emulateMediaFeatures", None)
-            if callable(emulate_media_features):
-                emulate_result = emulate_media_features(
-                    [
-                        {
-                            "name": "prefers-color-scheme",
-                            "value": normalized_theme,
-                        }
-                    ]
-                )
-                if asyncio.iscoroutine(emulate_result):
-                    await cast(Awaitable[Any], emulate_result)
-            else:
-                console.log(
-                    "emulateMediaFeatures unavailable in this pyppeteer build; using CSS fallback"
-                )
+            normalized_theme = (theme or "").strip().lower()
+            if normalized_theme in ["dark", "light"]:
+                page_any: Any = page
+                emulate_media_features = getattr(page_any, "emulateMediaFeatures", None)
+                if callable(emulate_media_features):
+                    emulate_result = emulate_media_features(
+                        [
+                            {
+                                "name": "prefers-color-scheme",
+                                "value": normalized_theme,
+                            }
+                        ]
+                    )
+                    if asyncio.iscoroutine(emulate_result):
+                        await cast(Awaitable[Any], emulate_result)
+                else:
+                    console.log(
+                        "emulateMediaFeatures unavailable in this pyppeteer build; using CSS fallback"
+                    )
 
-        # Navigate to URL with custom timeout
-        page_timeout = timeout_ms if timeout_ms else 30000
-        await page.goto(url, {"waitUntil": "domcontentloaded", "timeout": page_timeout})
-
-        if normalized_theme in ["dark", "light"]:
-            await page.evaluate(
-                """
-                (targetTheme) => {
-                    document.documentElement.style.colorScheme = targetTheme;
-                    document.documentElement.setAttribute('data-shot-theme', targetTheme);
-                }
-                """,
-                normalized_theme,
+            # Navigate to URL with custom timeout
+            page_timeout = timeout_ms if timeout_ms else 30000
+            await page.goto(
+                url, {"waitUntil": "domcontentloaded", "timeout": page_timeout}
             )
 
-        # Wait for selectors if specified
-        for selector in selector_list:
+            if normalized_theme in ["dark", "light"]:
+                await page.evaluate(
+                    """
+                    (targetTheme) => {
+                        document.documentElement.style.colorScheme = targetTheme;
+                        document.documentElement.setAttribute('data-shot-theme', targetTheme);
+                    }
+                    """,
+                    normalized_theme,
+                )
+
+            # Wait for selectors if specified
+            for selector in selector_list:
+                try:
+                    await page.waitForSelector(selector, {"timeout": 5000})
+                except Exception:
+                    console.log(f"Selector {selector} not found")
+
+            media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
+
+            # Enhanced video handling
             try:
-                await page.waitForSelector(selector, {"timeout": 5000})
-            except:
-                console.log(f"Selector {selector} not found")
+                # Try to play visible videos and wait for a renderable frame
+                await page.evaluate("""
+                    () => {
+                        const isVisible = (el) => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const onScreen =
+                                rect.bottom > 0 &&
+                                rect.right > 0 &&
+                                rect.top < window.innerHeight &&
+                                rect.left < window.innerWidth;
+                            const visible =
+                                rect.width > 0 &&
+                                rect.height > 0 &&
+                                style.display !== 'none' &&
+                                style.visibility !== 'hidden';
+                            return onScreen && visible;
+                        };
 
-        media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
+                        const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
+                        console.log(`Found ${videos.length} video elements`);
 
-        # Enhanced video handling
-        try:
-            # Try to play visible videos and wait for a renderable frame
-            await page.evaluate("""
-                () => {
-                    const isVisible = (el) => {
-                        const rect = el.getBoundingClientRect();
-                        const style = window.getComputedStyle(el);
-                        const onScreen =
-                            rect.bottom > 0 &&
-                            rect.right > 0 &&
-                            rect.top < window.innerHeight &&
-                            rect.left < window.innerWidth;
-                        const visible =
-                            rect.width > 0 &&
-                            rect.height > 0 &&
-                            style.display !== 'none' &&
-                            style.visibility !== 'hidden';
-                        return onScreen && visible;
-                    };
+                        videos.forEach((video, index) => {
+                            video.muted = true;
+                            video.playsInline = true;
+                            video.autoplay = true;
+                            video.preload = video.preload || 'auto';
 
-                    // Find visible video elements only
-                    const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
-                    console.log(`Found ${videos.length} video elements`);
-                    
-                    // Try to play each video
-                    videos.forEach((video, index) => {
-                        video.muted = true;  // Mute to avoid autoplay issues
-                        video.playsInline = true;
-                        video.autoplay = true;
-                        video.preload = video.preload || 'auto';
-
-                        // Nudge off exact 0s where some players draw blank poster frames.
-                        if (video.readyState >= 1 && video.currentTime === 0) {
-                            try {
-                                video.currentTime = 0.05;
-                            } catch (err) {
-                                // Ignore seek failures
+                            if (video.readyState >= 1 && video.currentTime === 0) {
+                                try {
+                                    video.currentTime = 0.05;
+                                } catch (err) {
+                                }
                             }
+
+                            video.play().then(() => {
+                                console.log(`Video ${index} started playing`);
+                            }).catch(err => {
+                                console.log(`Video ${index} play failed:`, err.message);
+                            });
+                        });
+
+                        return videos.length > 0;
+                    }
+                """)
+
+                if timeout_ms:
+                    console.log(f"Waiting {media_wait_timeout}ms for videos to load...")
+                    await page.waitForFunction(
+                        """
+                        () => {
+                            const isVisible = (el) => {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                const onScreen =
+                                    rect.bottom > 0 &&
+                                    rect.right > 0 &&
+                                    rect.top < window.innerHeight &&
+                                    rect.left < window.innerWidth;
+                                const visible =
+                                    rect.width > 0 &&
+                                    rect.height > 0 &&
+                                    style.display !== 'none' &&
+                                    style.visibility !== 'hidden';
+                                return onScreen && visible;
+                            };
+
+                            const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
+                            if (videos.length === 0) return true;
+
+                            return videos.some((video) => {
+                                const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+                                const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
+                                return hasFrame && hasStarted;
+                            });
                         }
+                        """,
+                        {"timeout": media_wait_timeout},
+                    )
+                else:
+                    await page.waitForFunction(
+                        """
+                        () => {
+                            const isVisible = (el) => {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                const onScreen =
+                                    rect.bottom > 0 &&
+                                    rect.right > 0 &&
+                                    rect.top < window.innerHeight &&
+                                    rect.left < window.innerWidth;
+                                const visible =
+                                    rect.width > 0 &&
+                                    rect.height > 0 &&
+                                    style.display !== 'none' &&
+                                    style.visibility !== 'hidden';
+                                return onScreen && visible;
+                            };
 
-                        video.play().then(() => {
-                            console.log(`Video ${index} started playing`);
-                        }).catch(err => {
-                            console.log(`Video ${index} play failed:`, err.message);
-                        });
-                    });
-                    
-                    return videos.length > 0;
-                }
-            """)
+                            const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
+                            if (videos.length === 0) return true;
+                            return videos.some((video) => {
+                                const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+                                const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
+                                return hasFrame && hasStarted;
+                            });
+                        }
+                        """,
+                        {"timeout": 5000},
+                    )
 
-            # Wait for visible videos to have frame data before capture.
-            if timeout_ms:
-                console.log(f"Waiting {media_wait_timeout}ms for videos to load...")
-                await page.waitForFunction(
-                    """
-                    () => {
-                        const isVisible = (el) => {
-                            const rect = el.getBoundingClientRect();
-                            const style = window.getComputedStyle(el);
-                            const onScreen =
-                                rect.bottom > 0 &&
-                                rect.right > 0 &&
-                                rect.top < window.innerHeight &&
-                                rect.left < window.innerWidth;
-                            const visible =
-                                rect.width > 0 &&
-                                rect.height > 0 &&
-                                style.display !== 'none' &&
-                                style.visibility !== 'hidden';
-                            return onScreen && visible;
-                        };
+            except Exception as exc:
+                console.log(f"Video handling failed: {exc}")
+                await asyncio.sleep(1)
 
-                        const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
-                        if (videos.length === 0) return true;
+            screenshot_options: dict[str, Any] = {"path": output, "fullPage": False}
+            if capture_format == "jpeg":
+                screenshot_options["type"] = "jpeg"
+                screenshot_options["quality"] = 80
+            elif capture_format == "png":
+                screenshot_options["type"] = "png"
 
-                        return videos.some((video) => {
-                            const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
-                            const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
-                            return hasFrame && hasStarted;
-                        });
-                    }
-                    """,
-                    {"timeout": media_wait_timeout},
-                )
-            else:
-                # Default 5 second wait for videos
-                await page.waitForFunction(
-                    """
-                    () => {
-                        const isVisible = (el) => {
-                            const rect = el.getBoundingClientRect();
-                            const style = window.getComputedStyle(el);
-                            const onScreen =
-                                rect.bottom > 0 &&
-                                rect.right > 0 &&
-                                rect.top < window.innerHeight &&
-                                rect.left < window.innerWidth;
-                            const visible =
-                                rect.width > 0 &&
-                                rect.height > 0 &&
-                                style.display !== 'none' &&
-                                style.visibility !== 'hidden';
-                            return onScreen && visible;
-                        };
+            # Take screenshot
+            await page.screenshot(screenshot_options)
+            return True
+        except Exception as exc:
+            console.log(f"Screenshot failed: {str(exc)}")
+            return False
+        finally:
+            if page is not None:
+                await page.close()
 
-                        const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
-                        if (videos.length === 0) return true;
-                        return videos.some((video) => {
-                            const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
-                            const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
-                            return hasFrame && hasStarted;
-                        });
-                    }
-                    """,
-                    {"timeout": 5000},
-                )
 
-        except Exception as e:
-            console.log(f"Video handling failed: {e}")
-            await asyncio.sleep(1)
-
-        # Take screenshot
-        await page.screenshot({"path": output, "fullPage": False})
-        await browser.close()
-        return True
-    except Exception as e:
-        console.log(f"Screenshot failed: {str(e)}")
-        return False
+async def _run_command(cmd: list[str]) -> None:
+    console.log(f"running {cmd}")
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    console.log(stdout.decode())
+    console.log(stderr.decode())
 
 
 async def generate_image_data(
@@ -262,68 +349,85 @@ async def generate_image_data(
 
     output = "/tmp/" + imgname.replace(format, "png")
     output_final = "/tmp/" + imgname
+    capture_format: Optional[str] = None
+    storage_client = config.s3_client
+
+    if isinstance(storage_client, LocalStorageClient):
+        output_final = str(storage_client.local_path(imgname))
+        if format == "webp":
+            output = "/tmp/" + imgname.replace(format, "png")
+        else:
+            output = output_final
+
+    if scaled_width == width and scaled_height == height:
+        if format == "jpg":
+            output = output_final
+            capture_format = "jpeg"
+        elif format == "png":
+            output = output_final
+            capture_format = "png"
 
     # Check if exists in S3
-    if config.s3_client.file_exists(imgname):
+    if storage_client.file_exists(imgname):
         return imgname, output_final, True  # exists in S3
 
     # Take screenshot
     screenshot_success = await take_screenshot(
-        url, width, height, selector_list, output, timeout_ms, theme
+        url,
+        width,
+        height,
+        selector_list,
+        output,
+        timeout_ms,
+        theme,
+        capture_format,
     )
     if not screenshot_success:
         raise HTTPException(status_code=500, detail="Failed to take screenshot")
 
-    # Resize if needed
-    if Path(output).exists() and (scaled_width != width or scaled_height != height):
-        cmd = [
-            "convert",
-            output,
-            "-resize",
-            f"{scaled_width}x{scaled_height}",
-            output,
-        ]
-        console.log(f"running {cmd}")
-        resize_proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await resize_proc.communicate()
-        console.log(stdout.decode())
-        console.log(stderr.decode())
+    async with _get_postprocess_limiter():
+        # Resize if needed
+        if Path(output).exists() and (scaled_width != width or scaled_height != height):
+            await _run_command(
+                [
+                    "convert",
+                    output,
+                    "-resize",
+                    f"{scaled_width}x{scaled_height}",
+                    output,
+                ]
+            )
 
-    # Convert to the requested format
-    if format == "webp":
-        cmd = [
-            "cwebp",
-            "-q",
-            "80",
-            output,
-            "-o",
-            output_final,
-        ]
-    elif format == "jpg":
-        cmd = [
-            "convert",
-            output,
-            "-quality",
-            "80",
-            output_final,
-        ]
-    else:  # PNG - just copy the file
-        cmd = ["cp", output, output_final]
+        # Convert to the requested format
+        if output == output_final:
+            cmd = None
+        elif format == "webp":
+            cmd = [
+                "cwebp",
+                "-q",
+                "80",
+                output,
+                "-o",
+                output_final,
+            ]
+        elif format == "jpg":
+            cmd = [
+                "convert",
+                output,
+                "-quality",
+                "80",
+                output_final,
+            ]
+        else:  # PNG - just copy the file
+            cmd = ["cp", output, output_final]
 
-    if Path(output).exists():
-        console.log(f"running {cmd}")
-        convert_proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await convert_proc.communicate()
-        console.log(stdout.decode())
-        console.log(stderr.decode())
+        if cmd and Path(output).exists():
+            await _run_command(cmd)
 
-    # Upload to S3
-    if Path(output_final).exists():
-        print("putting", output_final, imgname)
-        await config.s3_client.upload_file(output_final, imgname)
+        # Upload to storage
+        if Path(output_final).exists():
+            print("putting", output_final, imgname)
+            if not isinstance(storage_client, LocalStorageClient):
+                await storage_client.upload_file(output_final, imgname)
 
     return imgname, output_final, False  # newly created

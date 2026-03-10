@@ -39,6 +39,7 @@ def _build_job_stats(job_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         status = row.get("status")
         created_at = row.get("created_at")
         updated_at = row.get("updated_at")
+        started_processing_at = row.get("started_processing_at")
 
         if status in stats:
             stats[status] += 1
@@ -48,18 +49,23 @@ def _build_job_stats(job_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             updated_at, (int, float)
         ):
             duration = max(0.0, updated_at - created_at)
-            if status == JobStatus.COMPLETED.value:
-                completed_durations.append(duration)
             if status in [JobStatus.COMPLETED.value, JobStatus.FAILED.value]:
                 terminal_durations.append(duration)
+
+        if isinstance(started_processing_at, (int, float)) and isinstance(
+            updated_at, (int, float)
+        ):
+            processing_duration = max(0.0, updated_at - started_processing_at)
+            if status == JobStatus.COMPLETED.value:
+                completed_durations.append(processing_duration)
 
         if status == JobStatus.QUEUED.value and isinstance(created_at, (int, float)):
             queued_ages.append(max(0.0, now - created_at))
 
         if status == JobStatus.PROCESSING.value and isinstance(
-            created_at, (int, float)
+            started_processing_at, (int, float)
         ):
-            processing_ages.append(max(0.0, now - created_at))
+            processing_ages.append(max(0.0, now - started_processing_at))
 
         if (
             status == JobStatus.COMPLETED.value
@@ -246,6 +252,7 @@ class ScreenshotQueue(QueueBase):
             "status": JobStatus.QUEUED.value,
             "created_at": time.time(),
             "updated_at": time.time(),
+            "started_processing_at": None,
             "error": None,
             "filename": expected_filename,
         }
@@ -304,7 +311,12 @@ class ScreenshotQueue(QueueBase):
         job_data = self.get_job(job_id)
         if job_data:
             job_data["status"] = status.value
-            job_data["updated_at"] = time.time()
+            now = time.time()
+            job_data["updated_at"] = now
+            if status == JobStatus.PROCESSING and not isinstance(
+                job_data.get("started_processing_at"), (int, float)
+            ):
+                job_data["started_processing_at"] = now
             if error:
                 job_data["error"] = error
             if filename:
@@ -595,6 +607,7 @@ class RedisQueue(QueueBase):
             "status": JobStatus.QUEUED.value,
             "created_at": time.time(),
             "updated_at": time.time(),
+            "started_processing_at": None,
             "error": None,
             "filename": expected_filename,
         }
@@ -639,6 +652,10 @@ class RedisQueue(QueueBase):
         now = time.time()
         job_data["status"] = status.value
         job_data["updated_at"] = now
+        if status == JobStatus.PROCESSING and not isinstance(
+            job_data.get("started_processing_at"), (int, float)
+        ):
+            job_data["started_processing_at"] = now
         if error:
             job_data["error"] = error
         if filename:
@@ -653,6 +670,7 @@ class RedisQueue(QueueBase):
             pipeline.hincrby(self.stats_key, status.value, 1)
 
             created_at = job_data.get("created_at")
+            started_processing_at = job_data.get("started_processing_at")
             if isinstance(created_at, (int, float)) and status in [
                 JobStatus.COMPLETED,
                 JobStatus.FAILED,
@@ -664,11 +682,14 @@ class RedisQueue(QueueBase):
                     duration,
                 )
                 pipeline.hincrby(self.stats_key, "terminal_duration_count", 1)
-                if status == JobStatus.COMPLETED:
+                if status == JobStatus.COMPLETED and isinstance(
+                    started_processing_at, (int, float)
+                ):
+                    processing_duration = max(0.0, now - started_processing_at)
                     pipeline.hincrbyfloat(
                         self.stats_key,
                         "completed_duration_sum_seconds",
-                        duration,
+                        processing_duration,
                     )
                     pipeline.hincrby(self.stats_key, "completed_duration_count", 1)
                     pipeline.zadd(self.completed_timestamps_key, {job_id: now})
@@ -756,8 +777,12 @@ class RedisQueue(QueueBase):
         processing_ages: List[float] = []
         for job_id in processing_ids:
             job_data = self.get_job(job_id)
-            if job_data and isinstance(job_data.get("created_at"), (int, float)):
-                processing_ages.append(max(0.0, now - job_data["created_at"]))
+            if job_data and isinstance(
+                job_data.get("started_processing_at"), (int, float)
+            ):
+                processing_ages.append(
+                    max(0.0, now - job_data["started_processing_at"])
+                )
 
         self.redis.zremrangebyscore(self.completed_timestamps_key, 0, now - 3600)
         completed_last_hour = self.redis.zcard(self.completed_timestamps_key)

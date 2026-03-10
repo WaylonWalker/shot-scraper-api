@@ -20,6 +20,11 @@ run:
 dev:
     uv run uvicorn shot_scraper_api.api.app:app --host 0.0.0.0 --port 5000
 
+clean-dev:
+    rm -rf /tmp/shot-scraper-queue .cache/shots .cache/shots-local
+    mkdir -p .cache
+    echo cleaned local queue and storage state
+
 create-ns:
     kubectl create ns shot && echo created ns shot || echo namespace shot already exists
 cred:

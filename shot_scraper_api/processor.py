@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from typing import Optional
 
 from shot_scraper_api.screenshot import generate_image_data
@@ -12,7 +11,7 @@ class QueueProcessor:
     def __init__(self, poll_interval: float = 1.0):
         self.poll_interval = poll_interval
         self.running = False
-        self.task: Optional[asyncio.Task] = None
+        self.tasks: list[asyncio.Task] = []
 
     async def start(self):
         """Start the background queue processor"""
@@ -20,21 +19,27 @@ class QueueProcessor:
             return
 
         self.running = True
-        self.task = asyncio.create_task(self._process_queue())
-        console.log("Queue processor started")
+        worker_count = max(1, int(config.queue_processor_concurrency))
+        self.tasks = [
+            asyncio.create_task(self._process_queue(worker_index))
+            for worker_index in range(worker_count)
+        ]
+        console.log(f"Queue processor started with {worker_count} workers")
 
     async def stop(self):
         """Stop the background queue processor"""
         self.running = False
-        if self.task:
-            self.task.cancel()
+        for task in self.tasks:
+            task.cancel()
+        for task in self.tasks:
             try:
-                await self.task
+                await task
             except asyncio.CancelledError:
                 pass
+        self.tasks = []
         console.log("Queue processor stopped")
 
-    async def _process_queue(self):
+    async def _process_queue(self, worker_index: int):
         """Main queue processing loop"""
         queue = get_queue()
 
@@ -52,7 +57,7 @@ class QueueProcessor:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                console.log(f"Queue processor error: {e}")
+                console.log(f"Queue processor worker {worker_index} error: {e}")
                 await asyncio.sleep(self.poll_interval)
 
     async def _process_job(self, queue, job):

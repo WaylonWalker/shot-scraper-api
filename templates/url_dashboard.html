@@ -4,6 +4,13 @@
 {% block head %}
     {{ super() }}
     <meta http-equiv="refresh" content="5" />
+    <script>
+        window.setTimeout(function () {
+            var nextUrl = new URL(window.location.href);
+            nextUrl.searchParams.set("_dashboard_refresh", String(Date.now()));
+            window.location.replace(nextUrl.toString());
+        }, 5000);
+    </script>
 {% endblock %}
 {% block content %}
 <main class="dashboard-shell">
@@ -12,7 +19,7 @@
             <h1>URL dashboard</h1>
             <p>Queue status and URL history.</p>
         </div>
-        <p class="dashboard-refresh-note">Auto-refreshes every 5 seconds.</p>
+        <p class="dashboard-refresh-note">Updated at {{ refreshed_at }}. Refreshes every 5 seconds.</p>
     </header>
 
     <section class="dashboard-summary" aria-label="Summary">
@@ -43,18 +50,22 @@
                     <h2>Environment</h2>
                 </div>
                 <dl class="dashboard-meta-list">
+                    {% for item in storage.details %}
                     <div>
-                        <dt>Bucket</dt>
-                        <dd class="dashboard-code">{{ storage.bucket }}</dd>
+                        <dt>{{ item.label }}</dt>
+                        <dd class="dashboard-code">{{ item.value }}</dd>
                     </div>
-                    <div>
-                        <dt>Endpoint</dt>
-                        <dd class="dashboard-code">{{ storage.endpoint }}</dd>
-                    </div>
+                    {% endfor %}
                     <div>
                         <dt>Queue backend</dt>
                         <dd class="dashboard-code">{{ storage.queue_backend }}</dd>
                     </div>
+                    {% for item in storage.runtime %}
+                    <div>
+                        <dt>{{ item.label }}</dt>
+                        <dd>{{ item.value }}</dd>
+                    </div>
+                    {% endfor %}
                     <div>
                         <dt>Queued</dt>
                         <dd>{{ queue_stats.queued }}</dd>
@@ -84,6 +95,10 @@
                         <dd>{{ queue_stats.processing_avg_age_seconds }}s</dd>
                     </div>
                     <div>
+                        <dt>Render avg time</dt>
+                        <dd>{{ queue_stats.avg_processing_time_seconds }}s</dd>
+                    </div>
+                    <div>
                         <dt>Success rate</dt>
                         <dd>{{ queue_stats.success_rate_percent }}%</dd>
                     </div>
@@ -105,7 +120,8 @@
                             <tr>
                                 <th>Status</th>
                                 <th>Job</th>
-                                <th>Age</th>
+                                <th>Worker time</th>
+                                <th>Queued</th>
                                 <th>Priority</th>
                                 <th>URL</th>
                             </tr>
@@ -115,7 +131,8 @@
                             <tr>
                                 <td class="dashboard-status-text dashboard-status-text--{{ job.status }}">{{ job.status }}</td>
                                 <td><a href="/job/{{ job.job_id }}" class="dashboard-job-link dashboard-code">{{ job.job_id }}</a></td>
-                                <td>{{ job.age_seconds }}s</td>
+                                <td>{{ job.worker_seconds }}s</td>
+                                <td>{% if job.queued_seconds %}{{ job.queued_seconds }}s{% else %}-{% endif %}</td>
                                 <td>{{ job.priority }}</td>
                                 <td class="dashboard-url-cell"><a href="{{ job.url }}" target="_blank" rel="noreferrer" title="{{ job.url }}">{{ job.url }}</a></td>
                             </tr>
@@ -152,17 +169,17 @@
                                     <a href="{{ row.url }}" target="_blank" rel="noreferrer" title="{{ row.url }}">{{ row.url }}</a>
                                 </td>
                                 <td>{{ row.request_count }}</td>
-                                <td>
+                                <td class="dashboard-methods-cell">
                                     <div class="dashboard-inline-list">
                                         {% for method, count in row.method_counts.items() %}
                                         <span class="dashboard-method">{{ method }} {{ count }}</span>
                                         {% endfor %}
                                     </div>
                                 </td>
-                                <td>
+                                <td class="dashboard-files-cell">
                                     <div class="dashboard-inline-list">
                                         {% for filename in row.filenames %}
-                                        <a href="/shot/{{ filename }}" class="dashboard-file-link">{{ filename }}</a>
+                                        <a href="/shot/{{ filename }}" class="dashboard-file-link" title="{{ filename }}">{{ filename }}</a>
                                         {% endfor %}
                                     </div>
                                 </td>

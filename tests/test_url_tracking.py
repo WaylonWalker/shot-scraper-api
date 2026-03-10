@@ -18,6 +18,7 @@ class FakeQueue:
                 "status": "processing",
                 "priority": 5,
                 "created_at": 1.0,
+                "started_processing_at": 6.0,
             },
             {
                 "job_id": "job-queued",
@@ -40,6 +41,7 @@ class FakeQueue:
             "queued_avg_age_seconds": 2.5,
             "queued_oldest_age_seconds": 4.0,
             "processing_avg_age_seconds": 1.5,
+            "avg_processing_time_seconds": 2.25,
             "success_rate_percent": 100.0,
         }
 
@@ -121,10 +123,24 @@ def test_url_stats_endpoint_lists_tracked_urls(monkeypatch):
     fake_config = SimpleNamespace(
         queue_processor_enabled=False,
         s3_client=SimpleNamespace(file_exists=lambda _filename: False),
+        storage_backend="s3",
+        local_storage_dir=None,
+        aws_bucket_name=None,
+        aws_endpoint_url=None,
+        queue_backend="auto",
+        queue_processor_concurrency=2,
+        render_concurrency=None,
+        postprocess_concurrency=None,
     )
 
     monkeypatch.setattr(app_module, "config", fake_config)
     monkeypatch.setattr(app_module, "get_queue", lambda: queue)
+
+    async def fake_browser_lifecycle() -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "warm_browser", fake_browser_lifecycle)
+    monkeypatch.setattr(app_module, "close_browser", fake_browser_lifecycle)
 
     expected_filename = build_image_name(
         "https://example.com",
@@ -170,14 +186,24 @@ def test_url_dashboard_renders_tracked_stats(monkeypatch):
 
     fake_config = SimpleNamespace(
         queue_processor_enabled=False,
+        storage_backend="s3",
+        local_storage_dir=None,
         aws_bucket_name=None,
         aws_endpoint_url=None,
         queue_backend="auto",
+        queue_processor_concurrency=2,
+        render_concurrency=3,
+        postprocess_concurrency=1,
     )
+
+    async def fake_browser_lifecycle() -> None:
+        return None
 
     monkeypatch.setattr(app_module, "config", fake_config)
     monkeypatch.setattr(app_module, "get_queue", lambda: queue)
     monkeypatch.setattr(app_module.time, "time", lambda: 11.0)
+    monkeypatch.setattr(app_module, "warm_browser", fake_browser_lifecycle)
+    monkeypatch.setattr(app_module, "close_browser", fake_browser_lifecycle)
 
     with TestClient(app) as client:
         response = client.get("/dashboard/urls")
@@ -185,19 +211,28 @@ def test_url_dashboard_renders_tracked_stats(monkeypatch):
 
     assert response.status_code == 200
     assert canonical.status_code == 200
+    assert (
+        response.headers["cache-control"]
+        == "no-store, no-cache, max-age=0, must-revalidate"
+    )
     assert "URL dashboard" in response.text
     assert "Environment" in response.text
     assert "Bucket" in response.text
     assert "(not set)" in response.text
     assert "AWS S3 default" in response.text
+    assert "Workers" in response.text
+    assert "Render limit" in response.text
+    assert "Post-process limit" in response.text
     assert "Tracked URLs" in response.text
     assert "Total requests" in response.text
     assert "Queued avg age" in response.text
+    assert "Render avg time" in response.text
     assert "In flight" in response.text
     assert "job-processing" in response.text
     assert "/job/job-processing" in response.text
-    assert "10.0s" in response.text
+    assert "5.0s" in response.text
     assert "Processing now" in response.text
-    assert "Auto-refreshes every 5 seconds." in response.text
+    assert "Refreshes every 5 seconds." in response.text
+    assert "Updated at 11" in response.text
     assert "https://example.com" in response.text
     assert "example.webp" in response.text

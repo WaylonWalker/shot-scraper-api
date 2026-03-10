@@ -14,7 +14,7 @@ from shot_scraper_api.config import config
 from shot_scraper_api.console import console
 from shot_scraper_api.processor import start_queue_processor, stop_queue_processor
 from shot_scraper_api.queue import get_queue
-from shot_scraper_api.screenshot import build_image_name
+from shot_scraper_api.screenshot import build_image_name, close_browser, warm_browser
 
 
 app = FastAPI()
@@ -31,6 +31,7 @@ async def startup_event():
         else:
             console.log("Queue processor disabled")
 
+        await warm_browser()
         console.log("Browser initialized and warmed up")
     except Exception as e:
         console.log(f"Failed to initialize browser: {str(e)}")
@@ -43,6 +44,7 @@ async def shutdown_event():
         if config.queue_processor_enabled:
             await stop_queue_processor()
             console.log("Queue processor stopped")
+        await close_browser()
     except Exception as e:
         console.log(f"Error during shutdown: {str(e)}")
 
@@ -437,22 +439,62 @@ def get_url_dashboard(request: Request):
     now = time.time()
     active_jobs = []
     for job in queue.get_active_jobs():
+        started_processing_at = job.get("started_processing_at")
         created_at = job.get("created_at")
-        age_seconds = 0.0
-        if isinstance(created_at, (int, float)):
-            age_seconds = round(max(0.0, now - created_at), 1)
+        worker_seconds = 0.0
+        queued_seconds = 0.0
+        if isinstance(started_processing_at, (int, float)):
+            worker_seconds = round(max(0.0, now - started_processing_at), 1)
+        if not worker_seconds and isinstance(created_at, (int, float)):
+            queued_seconds = round(max(0.0, now - created_at), 1)
         active_jobs.append(
             {
                 **job,
-                "age_seconds": age_seconds,
+                "worker_seconds": worker_seconds,
+                "queued_seconds": queued_seconds,
             }
         )
+    storage_backend = (config.storage_backend or "s3").lower()
+    storage_details = [
+        {"label": "Backend", "value": storage_backend},
+    ]
+    if storage_backend == "local":
+        storage_details.append(
+            {"label": "Directory", "value": config.local_storage_dir or ".cache/shots"}
+        )
+    else:
+        storage_details.extend(
+            [
+                {"label": "Bucket", "value": config.aws_bucket_name or "(not set)"},
+                {
+                    "label": "Endpoint",
+                    "value": config.aws_endpoint_url or "AWS S3 default",
+                },
+            ]
+        )
     storage = {
-        "bucket": config.aws_bucket_name or "(not set)",
-        "endpoint": config.aws_endpoint_url or "AWS S3 default",
+        "details": storage_details,
+        "runtime": [
+            {
+                "label": "Workers",
+                "value": str(config.queue_processor_concurrency),
+            },
+            {
+                "label": "Render limit",
+                "value": str(
+                    config.render_concurrency or config.queue_processor_concurrency
+                ),
+            },
+            {
+                "label": "Post-process limit",
+                "value": str(
+                    config.postprocess_concurrency or config.queue_processor_concurrency
+                ),
+            },
+        ],
         "queue_backend": (config.queue_backend or "auto").lower(),
     }
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         "url_dashboard.html",
         {
             "request": request,
@@ -460,8 +502,12 @@ def get_url_dashboard(request: Request):
             "queue_stats": queue_stats,
             "active_jobs": active_jobs,
             "storage": storage,
+            "refreshed_at": int(now),
         },
     )
+    for key, value in _no_cache_headers().items():
+        response.headers[key] = value
+    return response
 
 
 @app.get("/favicon.ico", response_class=FileResponse)
