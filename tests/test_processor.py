@@ -99,3 +99,63 @@ def test_stage_limiters_follow_independent_config(monkeypatch):
 
     assert render_limiter._value == 4
     assert postprocess_limiter._value == 2
+
+
+def test_page_pool_reuses_pages(monkeypatch):
+    pages = []
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.closed = False
+            self.visits = []
+
+        async def goto(self, url: str, _options=None) -> None:
+            self.visits.append(url)
+
+        def isClosed(self) -> bool:
+            return self.closed
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeBrowser:
+        def isConnected(self) -> bool:
+            return True
+
+        async def newPage(self) -> FakePage:
+            page = FakePage()
+            pages.append(page)
+            return page
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_launch(*_args, **_kwargs):
+        return FakeBrowser()
+
+    async def _exercise_page_pool() -> None:
+        screenshot_module.reset_stage_limiters()
+        await screenshot_module.close_browser()
+        monkeypatch.setattr(screenshot_module, "launch", fake_launch)
+        monkeypatch.setattr(
+            screenshot_module,
+            "config",
+            SimpleNamespace(
+                queue_processor_concurrency=2,
+                render_concurrency=2,
+                postprocess_concurrency=1,
+            ),
+        )
+
+        first = await screenshot_module.acquire_page()
+        await screenshot_module.release_page(first)
+        second = await screenshot_module.acquire_page()
+        await screenshot_module.release_page(second)
+        await screenshot_module.close_browser()
+
+        assert first is second
+
+    asyncio.run(_exercise_page_pool())
+
+    assert len(pages) == 1
+    assert pages[0].visits == ["about:blank", "about:blank"]

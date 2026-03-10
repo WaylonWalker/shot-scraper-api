@@ -13,6 +13,10 @@ from shot_scraper_api.s3 import LocalStorageClient
 
 _browser: Any = None
 _browser_lock = asyncio.Lock()
+_page_pool: asyncio.Queue[Any] | None = None
+_page_pool_lock = asyncio.Lock()
+_page_pool_size: int | None = None
+_page_pool_created = 0
 _render_limiter: asyncio.Semaphore | None = None
 _render_limiter_size: int | None = None
 _postprocess_limiter: asyncio.Semaphore | None = None
@@ -46,10 +50,14 @@ def _get_postprocess_limiter() -> asyncio.Semaphore:
 def reset_stage_limiters() -> None:
     global _render_limiter, _render_limiter_size
     global _postprocess_limiter, _postprocess_limiter_size
+    global _page_pool, _page_pool_size, _page_pool_created
     _render_limiter = None
     _render_limiter_size = None
     _postprocess_limiter = None
     _postprocess_limiter_size = None
+    _page_pool = None
+    _page_pool_size = None
+    _page_pool_created = 0
 
 
 async def _launch_browser() -> Any:
@@ -80,11 +88,75 @@ async def warm_browser() -> None:
 
 async def close_browser() -> None:
     """Close the shared browser instance if one exists."""
-    global _browser
+    global _browser, _page_pool, _page_pool_size, _page_pool_created
     async with _browser_lock:
+        if _page_pool is not None:
+            while not _page_pool.empty():
+                page = await _page_pool.get()
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+        _page_pool = None
+        _page_pool_size = None
+        _page_pool_created = 0
         if _browser is not None:
             await _browser.close()
             _browser = None
+
+
+async def _ensure_page_pool() -> asyncio.Queue[Any]:
+    global _page_pool, _page_pool_size, _page_pool_created
+    async with _page_pool_lock:
+        size = _concurrency_limit(config.render_concurrency)
+        if _page_pool is None or _page_pool_size != size:
+            if _page_pool is not None:
+                while not _page_pool.empty():
+                    page = await _page_pool.get()
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+            _page_pool = asyncio.Queue()
+            _page_pool_size = size
+            _page_pool_created = 0
+        return _page_pool
+
+
+async def acquire_page() -> Any:
+    global _page_pool_created
+    pool = await _ensure_page_pool()
+    try:
+        return pool.get_nowait()
+    except asyncio.QueueEmpty:
+        pass
+
+    async with _page_pool_lock:
+        size = _concurrency_limit(config.render_concurrency)
+        if _page_pool_created < size:
+            browser = await get_browser()
+            page = await browser.newPage()
+            _page_pool_created += 1
+            return page
+
+    return await pool.get()
+
+
+async def release_page(page: Any) -> None:
+    pool = await _ensure_page_pool()
+    is_closed = getattr(page, "isClosed", None)
+    if callable(is_closed) and is_closed():
+        global _page_pool_created
+        async with _page_pool_lock:
+            _page_pool_created = max(0, _page_pool_created - 1)
+        return
+    try:
+        await page.goto(
+            "about:blank", {"waitUntil": "domcontentloaded", "timeout": 3000}
+        )
+    except Exception:
+        pass
+    await pool.put(page)
 
 
 def build_image_name(
@@ -124,8 +196,7 @@ async def take_screenshot(
     page = None
     async with _get_render_limiter():
         try:
-            browser = await get_browser()
-            page = await browser.newPage()
+            page = await acquire_page()
 
             # Set viewport
             await page.setViewport({"width": width, "height": height})
@@ -308,7 +379,7 @@ async def take_screenshot(
             return False
         finally:
             if page is not None:
-                await page.close()
+                await release_page(page)
 
 
 async def _run_command(cmd: list[str]) -> None:
