@@ -220,83 +220,82 @@ class ScreenshotQueue(QueueBase):
         priority: int = 0,
     ) -> str:
         """Add a screenshot job to the queue"""
-        job_id = self._get_next_job_id()
-        scaled_width = scaled_width or width
-        scaled_height = scaled_height or height
-        selector_list = selectors.split(",") if selectors else []
-        expected_filename = build_image_name(
-            url,
-            selector_list,
-            width,
-            height,
-            scaled_width,
-            scaled_height,
-            format,
-            version,
-            theme,
-        )
+        with self.cache.transact():
+            job_id = self._get_next_job_id()
+            scaled_width = scaled_width or width
+            scaled_height = scaled_height or height
+            selector_list = selectors.split(",") if selectors else []
+            expected_filename = build_image_name(
+                url,
+                selector_list,
+                width,
+                height,
+                scaled_width,
+                scaled_height,
+                format,
+                version,
+                theme,
+            )
 
-        job_data = {
-            "job_id": job_id,
-            "url": url,
-            "width": width,
-            "height": height,
-            "selectors": selectors,
-            "format": format,
-            "scaled_width": scaled_width,
-            "scaled_height": scaled_height,
-            "version": version,
-            "timeout": timeout,
-            "theme": theme,
-            "priority": priority,
-            "status": JobStatus.QUEUED.value,
-            "created_at": time.time(),
-            "updated_at": time.time(),
-            "started_processing_at": None,
-            "error": None,
-            "filename": expected_filename,
-        }
+            job_data = {
+                "job_id": job_id,
+                "url": url,
+                "width": width,
+                "height": height,
+                "selectors": selectors,
+                "format": format,
+                "scaled_width": scaled_width,
+                "scaled_height": scaled_height,
+                "version": version,
+                "timeout": timeout,
+                "theme": theme,
+                "priority": priority,
+                "status": JobStatus.QUEUED.value,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "started_processing_at": None,
+                "error": None,
+                "filename": expected_filename,
+            }
 
-        # Store job data
-        self.cache.set(f"job:{job_id}", job_data)
+            self.cache.set(f"job:{job_id}", job_data)
 
-        # Store filename index
-        filename_index_raw = self.cache.get(self.job_index_key)
-        filename_index = (
-            filename_index_raw if isinstance(filename_index_raw, dict) else {}
-        )
-        filename_index[expected_filename] = job_id
-        self.cache.set(self.job_index_key, filename_index)
+            filename_index_raw = self.cache.get(self.job_index_key)
+            filename_index = (
+                filename_index_raw if isinstance(filename_index_raw, dict) else {}
+            )
+            filename_index[expected_filename] = job_id
+            self.cache.set(self.job_index_key, filename_index)
 
-        # Add to priority queue
-        queue_key = f"queue:priority:{priority}"
-        existing_jobs_raw = self.cache.get(queue_key)
-        existing_jobs = existing_jobs_raw if isinstance(existing_jobs_raw, list) else []
-        existing_jobs.append(job_id)
-        self.cache.set(queue_key, existing_jobs)
+            queue_key = f"queue:priority:{priority}"
+            existing_jobs_raw = self.cache.get(queue_key)
+            existing_jobs = (
+                existing_jobs_raw if isinstance(existing_jobs_raw, list) else []
+            )
+            existing_jobs.append(job_id)
+            self.cache.set(queue_key, existing_jobs)
 
-        return job_id
+            return job_id
 
     def get_next_job(self) -> Optional[Dict[str, Any]]:
         """Get the next job from the queue"""
-        # Try to get from highest priority queue first
-        for priority in range(10, -1, -1):  # Check priorities 10 to 0
-            queue_key = f"queue:priority:{priority}"
-            job_ids_raw = self.cache.get(queue_key)
-            job_ids = job_ids_raw if isinstance(job_ids_raw, list) else []
+        with self.cache.transact():
+            for priority in range(10, -1, -1):
+                queue_key = f"queue:priority:{priority}"
+                job_ids_raw = self.cache.get(queue_key)
+                job_ids = job_ids_raw if isinstance(job_ids_raw, list) else []
 
-            if job_ids:
-                job_id = str(job_ids[0])
-                job_data = self.get_job(job_id)
+                if job_ids:
+                    job_id = str(job_ids[0])
+                    job_data = self.get_job(job_id)
 
-                if job_data and job_data["status"] == JobStatus.QUEUED.value:
-                    # Remove from this priority queue
-                    remaining_job_ids = job_ids[1:]
-                    if remaining_job_ids:
-                        self.cache.set(queue_key, remaining_job_ids)
-                    else:
-                        self.cache.delete(queue_key)
-                    return job_data
+                    if job_data and job_data["status"] == JobStatus.QUEUED.value:
+                        remaining_job_ids = job_ids[1:]
+                        if remaining_job_ids:
+                            self.cache.set(queue_key, remaining_job_ids)
+                        else:
+                            self.cache.delete(queue_key)
+                        return job_data
 
         return None
 

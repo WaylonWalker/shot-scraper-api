@@ -1,3 +1,46 @@
+## 0.0.37
+- Improve local queue throughput for screenshot generation
+- Add a local storage backend for development, so local runs do not need MinIO or S3
+- Reuse a shared browser and reusable browser pages to reduce per-shot overhead
+- Split concurrency controls between render and post-process stages with:
+  - `QUEUE_PROCESSOR_CONCURRENCY`
+  - `RENDER_CONCURRENCY`
+  - `POSTPROCESS_CONCURRENCY`
+- Warm the browser on startup and close it cleanly on shutdown
+- Add benchmarking and worker tooling:
+  - `scripts/benchmark_queue.py`
+  - `scripts/run_queue_worker.py`
+  - `scripts/benchmark_multi_process.py`
+- Add `just clean-dev` to clear local queue and storage state
+- Track worker pickup time separately from queue wait time
+- Update dashboard data to show:
+  - render average time
+  - worker time vs queued time
+  - storage backend details
+  - runtime concurrency settings
+- Improve dashboard refresh behavior and tighten table layout
+- Add tests for:
+  - processor concurrency
+  - browser reuse
+  - page reuse
+  - local storage
+  - dashboard updates
+
+## 0.0.36
+- Add a URL dashboard for request tracking
+- Track source URLs, generated filenames, request counts, and request methods
+- Add URL stats endpoints:
+  - `/dashboard`
+  - `/dashboard/urls`
+  - `/url/stats`
+  - `/urls/stats`
+- Add queue snapshot and in-flight job visibility to the dashboard
+- Show current storage configuration on the dashboard, including bucket or local backend details
+- Add auto-refresh and direct job links from the dashboard
+- Simplify the dashboard layout to a cleaner internal-tool style
+- Improve dashboard readability with denser rows and better URL/file truncation
+- Add tests for URL tracking, dashboard rendering, and queue state display
+
 ## 0.0.35
 
 - reduced media wait time.
