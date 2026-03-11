@@ -7,12 +7,12 @@ regcred:
 build:
     podman build \
         -t localhost:5000/shot-scraper-api \
-        -t localhost:5000/shot-scraper-api:$(hatch version) \
+        -t localhost:5000/shot-scraper-api:$(uv run hatch version) \
         -f Dockerfile .
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:$(hatch version)
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:latest
 push:
-    podman push --tls-verify=false localhost:5000/shot-scraper-api:$(hatch version)
+    podman push --tls-verify=false localhost:5000/shot-scraper-api:$(uv run hatch version)
     podman push --tls-verify=false localhost:5000/shot-scraper-api:latest
 run:
     podman run --env-file .env -p 5050:5000 registry.wayl.one/shot-scraper-api
