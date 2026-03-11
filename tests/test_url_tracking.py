@@ -236,3 +236,58 @@ def test_url_dashboard_renders_tracked_stats(monkeypatch):
     assert "Updated at 11" in response.text
     assert "https://example.com" in response.text
     assert "example.webp" in response.text
+
+
+def test_queue_cleanup_endpoint_returns_cleanup_counts(monkeypatch):
+    class CleanupQueue(FakeQueue):
+        def cleanup_old_jobs(
+            self,
+            max_age_hours: int = 24,
+            stale_age_minutes: int = 30,
+            dry_run: bool = False,
+        ):
+            return {
+                "completed": max_age_hours,
+                "failed": 0,
+                "queued": stale_age_minutes,
+                "processing": int(dry_run),
+            }
+
+    queue = CleanupQueue()
+    fake_config = SimpleNamespace(
+        queue_processor_enabled=False,
+        storage_backend="s3",
+        local_storage_dir=None,
+        aws_bucket_name=None,
+        aws_endpoint_url=None,
+        queue_backend="auto",
+        queue_processor_concurrency=2,
+        render_concurrency=3,
+        postprocess_concurrency=1,
+    )
+
+    async def fake_browser_lifecycle() -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "config", fake_config)
+    monkeypatch.setattr(app_module, "get_queue", lambda: queue)
+    monkeypatch.setattr(app_module, "warm_browser", fake_browser_lifecycle)
+    monkeypatch.setattr(app_module, "close_browser", fake_browser_lifecycle)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/queue/cleanup",
+            params={
+                "completed_age_hours": 12,
+                "stale_age_minutes": 45,
+                "dry_run": "true",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "completed": 12,
+        "failed": 0,
+        "queued": 45,
+        "processing": 1,
+    }

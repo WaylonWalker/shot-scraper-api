@@ -158,7 +158,12 @@ class QueueBase:
     def get_active_jobs(self) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
-    def cleanup_old_jobs(self, max_age_hours: int = 24):
+    def cleanup_old_jobs(
+        self,
+        max_age_hours: int = 24,
+        stale_age_minutes: int = 30,
+        dry_run: bool = False,
+    ) -> Dict[str, int]:
         raise NotImplementedError
 
 
@@ -448,30 +453,71 @@ class ScreenshotQueue(QueueBase):
         url_stats = url_stats_raw if isinstance(url_stats_raw, dict) else {}
         return _build_url_stats(list(url_stats.values()))
 
-    def cleanup_old_jobs(self, max_age_hours: int = 24):
-        """Clean up old completed/failed jobs"""
+    def cleanup_old_jobs(
+        self,
+        max_age_hours: int = 24,
+        stale_age_minutes: int = 30,
+        dry_run: bool = False,
+    ) -> Dict[str, int]:
+        """Clean up old completed/failed jobs and stale queued/processing jobs."""
         cutoff_time = time.time() - (max_age_hours * 3600)
+        stale_cutoff_time = time.time() - (stale_age_minutes * 60)
+        removed_counts = {"completed": 0, "failed": 0, "queued": 0, "processing": 0}
+        removed_job_ids: set[str] = set()
 
         for key in list(self.cache.iterkeys()):
-            if isinstance(key, str) and key.startswith("job:"):
-                job_data = self.cache.get(key)
-                if (
-                    job_data
-                    and isinstance(job_data, dict)
-                    and job_data["status"]
-                    in [JobStatus.COMPLETED.value, JobStatus.FAILED.value]
-                ):
-                    if job_data["updated_at"] < cutoff_time:
-                        self.cache.delete(key)
-                        filename_index_raw = self.cache.get(self.job_index_key)
-                        filename_index = (
-                            filename_index_raw
-                            if isinstance(filename_index_raw, dict)
-                            else {}
-                        )
-                        if job_data.get("filename") in filename_index:
-                            del filename_index[job_data["filename"]]
-                            self.cache.set(self.job_index_key, filename_index)
+            if not (isinstance(key, str) and key.startswith("job:")):
+                continue
+            job_data = self.cache.get(key)
+            if not (job_data and isinstance(job_data, dict)):
+                continue
+
+            status = str(job_data.get("status", ""))
+            updated_at = float(job_data.get("updated_at", 0) or 0)
+            created_at = float(job_data.get("created_at", 0) or 0)
+            started_processing_at = float(job_data.get("started_processing_at", 0) or 0)
+            should_remove = False
+
+            if status in [JobStatus.COMPLETED.value, JobStatus.FAILED.value]:
+                should_remove = updated_at < cutoff_time
+            elif status == JobStatus.QUEUED.value:
+                should_remove = created_at < stale_cutoff_time
+            elif status == JobStatus.PROCESSING.value:
+                marker = started_processing_at or updated_at or created_at
+                should_remove = marker < stale_cutoff_time
+
+            if not should_remove:
+                continue
+
+            removed_counts[status] += 1
+            removed_job_ids.add(str(job_data["job_id"]))
+            if dry_run:
+                continue
+
+            self.cache.delete(key)
+            filename_index_raw = self.cache.get(self.job_index_key)
+            filename_index = (
+                filename_index_raw if isinstance(filename_index_raw, dict) else {}
+            )
+            if job_data.get("filename") in filename_index:
+                del filename_index[job_data["filename"]]
+                self.cache.set(self.job_index_key, filename_index)
+
+        if removed_job_ids and not dry_run:
+            for priority in range(10, -1, -1):
+                queue_key = f"queue:priority:{priority}"
+                job_ids_raw = self.cache.get(queue_key)
+                job_ids = job_ids_raw if isinstance(job_ids_raw, list) else []
+                filtered = [
+                    job_id for job_id in job_ids if str(job_id) not in removed_job_ids
+                ]
+                if filtered != job_ids:
+                    if filtered:
+                        self.cache.set(queue_key, filtered)
+                    else:
+                        self.cache.delete(queue_key)
+
+        return removed_counts
 
 
 class RedisQueue(QueueBase):
@@ -866,22 +912,54 @@ class RedisQueue(QueueBase):
             jobs.append(json.loads(job_data))
         return _build_active_jobs(jobs)
 
-    def cleanup_old_jobs(self, max_age_hours: int = 24):
+    def cleanup_old_jobs(
+        self,
+        max_age_hours: int = 24,
+        stale_age_minutes: int = 30,
+        dry_run: bool = False,
+    ) -> Dict[str, int]:
         cutoff_time = time.time() - (max_age_hours * 3600)
+        stale_cutoff_time = time.time() - (stale_age_minutes * 60)
+        removed_counts = {"completed": 0, "failed": 0, "queued": 0, "processing": 0}
 
         for key in self.redis.scan_iter(match=f"{self.job_key_prefix}*"):
             job_data = self.redis.get(key)
             if not job_data:
                 continue
             data = json.loads(job_data)
-            if data.get("status") in [
-                JobStatus.COMPLETED.value,
-                JobStatus.FAILED.value,
-            ]:
-                if data.get("updated_at", 0) < cutoff_time:
-                    self.redis.delete(key)
-                    if data.get("filename"):
-                        self.redis.delete(self._job_index_key(data["filename"]))
+            status = data.get("status")
+            updated_at = float(data.get("updated_at", 0) or 0)
+            created_at = float(data.get("created_at", 0) or 0)
+            started_processing_at = float(data.get("started_processing_at", 0) or 0)
+
+            should_remove = False
+            if status in [JobStatus.COMPLETED.value, JobStatus.FAILED.value]:
+                should_remove = updated_at < cutoff_time
+            elif status == JobStatus.QUEUED.value:
+                should_remove = created_at < stale_cutoff_time
+            elif status == JobStatus.PROCESSING.value:
+                marker = started_processing_at or updated_at or created_at
+                should_remove = marker < stale_cutoff_time
+
+            if not should_remove or not isinstance(status, str):
+                continue
+
+            removed_counts[status] += 1
+            if dry_run:
+                continue
+
+            self.redis.delete(key)
+            job_id = data.get("job_id")
+            if job_id:
+                self.redis.zrem(self.queue_key, job_id)
+                self.redis.zrem(self.processing_key, job_id)
+            if data.get("filename"):
+                self.redis.delete(self._job_index_key(data["filename"]))
+
+        if not dry_run:
+            self._rebuild_stats()
+
+        return removed_counts
 
 
 # Global queue instance

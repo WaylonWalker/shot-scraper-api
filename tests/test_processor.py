@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from shot_scraper_api import processor as processor_module
 from shot_scraper_api import screenshot as screenshot_module
+from shot_scraper_api.queue import JobStatus, ScreenshotQueue
 
 
 def test_queue_processor_starts_multiple_workers(monkeypatch):
@@ -159,3 +160,36 @@ def test_page_pool_reuses_pages(monkeypatch):
 
     assert len(pages) == 1
     assert pages[0].visits == ["about:blank", "about:blank"]
+
+
+def test_screenshot_queue_cleans_stale_jobs(tmp_path):
+    queue = ScreenshotQueue(cache_dir=str(tmp_path / "queue-cache"))
+
+    completed_job = queue.add_job(url="https://example.com", priority=1)
+    processing_job = queue.add_job(url="https://example.org", priority=1)
+    queued_job = queue.add_job(url="https://example.net", priority=1)
+
+    queue.update_job_status(completed_job, JobStatus.COMPLETED)
+    queue.update_job_status(processing_job, JobStatus.PROCESSING)
+
+    old = 1.0
+    completed_data = queue.get_job(completed_job)
+    processing_data = queue.get_job(processing_job)
+    queued_data = queue.get_job(queued_job)
+    assert completed_data and processing_data and queued_data
+
+    completed_data["updated_at"] = old
+    processing_data["started_processing_at"] = old
+    processing_data["updated_at"] = old
+    queued_data["created_at"] = old
+
+    queue.cache.set(f"job:{completed_job}", completed_data)
+    queue.cache.set(f"job:{processing_job}", processing_data)
+    queue.cache.set(f"job:{queued_job}", queued_data)
+
+    removed = queue.cleanup_old_jobs(max_age_hours=24, stale_age_minutes=30)
+
+    assert removed == {"completed": 1, "failed": 0, "queued": 1, "processing": 1}
+    assert queue.get_job(completed_job) is None
+    assert queue.get_job(processing_job) is None
+    assert queue.get_job(queued_job) is None

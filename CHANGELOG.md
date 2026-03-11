@@ -1,3 +1,8 @@
+## 0.0.38
+- Add `POST /queue/cleanup` to remove stale queued and processing jobs along with old completed and failed jobs
+- Extend queue cleanup to support `stale_age_minutes` and `dry_run` for safer operations
+- Add tests for stale job cleanup and the cleanup endpoint
+
 ## 0.0.37
 - Improve local queue throughput for screenshot generation
 - Add a local storage backend for development, so local runs do not need MinIO or S3

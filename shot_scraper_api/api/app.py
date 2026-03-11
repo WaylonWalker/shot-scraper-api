@@ -686,6 +686,22 @@ async def get_queue_stats():
     return _json_no_cache_response(stats)
 
 
+@app.post("/queue/cleanup")
+async def cleanup_queue_jobs(
+    completed_age_hours: int = Query(default=24, ge=0),
+    stale_age_minutes: int = Query(default=30, ge=0),
+    dry_run: bool = Query(default=False),
+):
+    """Clean up old terminal jobs and stale active jobs."""
+    queue = get_queue()
+    result = queue.cleanup_old_jobs(
+        max_age_hours=completed_age_hours,
+        stale_age_minutes=stale_age_minutes,
+        dry_run=dry_run,
+    )
+    return _json_no_cache_response(result)
+
+
 @app.get("/url/stats")
 @app.get("/urls/stats")
 async def get_url_stats():
