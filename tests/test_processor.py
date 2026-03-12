@@ -162,6 +162,140 @@ def test_page_pool_reuses_pages(monkeypatch):
     assert pages[0].visits == ["about:blank", "about:blank"]
 
 
+def test_take_screenshot_retries_after_connection_closed(monkeypatch):
+    released = []
+    browser_resets = []
+
+    class FailingPage:
+        async def setViewport(self, _viewport) -> None:
+            raise Exception("Connection is closed")
+
+        async def close(self) -> None:
+            return None
+
+    class WorkingPage:
+        def __init__(self) -> None:
+            self.headers = None
+
+        async def setViewport(self, _viewport) -> None:
+            return None
+
+        async def setExtraHTTPHeaders(self, headers) -> None:
+            self.headers = headers
+
+        async def goto(self, _url, _options) -> None:
+            return None
+
+        async def evaluate(self, *_args) -> None:
+            return None
+
+        async def waitForFunction(self, *_args) -> None:
+            return None
+
+        async def screenshot(self, _options) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    pages = [FailingPage(), WorkingPage()]
+
+    async def fake_acquire_page():
+        return pages.pop(0)
+
+    async def fake_release_page(page, reusable=True):
+        released.append(reusable)
+
+    async def fake_close_browser():
+        browser_resets.append(True)
+
+    monkeypatch.setattr(screenshot_module, "acquire_page", fake_acquire_page)
+    monkeypatch.setattr(screenshot_module, "release_page", fake_release_page)
+    monkeypatch.setattr(screenshot_module, "close_browser", fake_close_browser)
+    monkeypatch.setattr(
+        screenshot_module,
+        "_get_render_limiter",
+        lambda: asyncio.Semaphore(1),
+    )
+
+    result = asyncio.run(
+        screenshot_module.take_screenshot(
+            url="https://example.com",
+            width=240,
+            height=160,
+            selector_list=[],
+            output="/tmp/test.jpg",
+            timeout_ms=1000,
+            capture_format="jpeg",
+        )
+    )
+
+    assert result is True
+    assert browser_resets == [True]
+    assert released == [False, True]
+
+
+def test_take_screenshot_sets_html_navigation_headers(monkeypatch):
+    captured_page = None
+
+    class HeaderPage:
+        def __init__(self) -> None:
+            self.headers = None
+
+        async def setViewport(self, _viewport) -> None:
+            return None
+
+        async def setExtraHTTPHeaders(self, headers) -> None:
+            self.headers = headers
+
+        async def goto(self, _url, _options) -> None:
+            return None
+
+        async def evaluate(self, *_args) -> None:
+            return None
+
+        async def waitForFunction(self, *_args) -> None:
+            return None
+
+        async def screenshot(self, _options) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_acquire_page():
+        nonlocal captured_page
+        captured_page = HeaderPage()
+        return captured_page
+
+    async def fake_release_page(_page, reusable=True):
+        return None
+
+    monkeypatch.setattr(screenshot_module, "acquire_page", fake_acquire_page)
+    monkeypatch.setattr(screenshot_module, "release_page", fake_release_page)
+    monkeypatch.setattr(
+        screenshot_module,
+        "_get_render_limiter",
+        lambda: asyncio.Semaphore(1),
+    )
+
+    result = asyncio.run(
+        screenshot_module.take_screenshot(
+            url="https://example.com",
+            width=240,
+            height=160,
+            selector_list=[],
+            output="/tmp/test.jpg",
+            timeout_ms=1000,
+            capture_format="jpeg",
+        )
+    )
+
+    assert result is True
+    assert captured_page is not None
+    assert captured_page.headers == screenshot_module.DEFAULT_NAVIGATION_HEADERS
+
+
 def test_screenshot_queue_cleans_stale_jobs(tmp_path):
     queue = ScreenshotQueue(cache_dir=str(tmp_path / "queue-cache"))
 

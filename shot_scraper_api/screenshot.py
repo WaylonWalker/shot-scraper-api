@@ -11,6 +11,12 @@ from shot_scraper_api.console import console
 from shot_scraper_api.s3 import LocalStorageClient
 
 
+DEFAULT_NAVIGATION_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 _browser: Any = None
 _browser_lock = asyncio.Lock()
 _page_pool: asyncio.Queue[Any] | None = None
@@ -21,6 +27,10 @@ _render_limiter: asyncio.Semaphore | None = None
 _render_limiter_size: int | None = None
 _postprocess_limiter: asyncio.Semaphore | None = None
 _postprocess_limiter_size: int | None = None
+
+
+def _is_connection_closed_error(exc: Exception) -> bool:
+    return "connection is closed" in str(exc).lower()
 
 
 def _concurrency_limit(value: Optional[int]) -> int:
@@ -142,10 +152,14 @@ async def acquire_page() -> Any:
     return await pool.get()
 
 
-async def release_page(page: Any) -> None:
+async def release_page(page: Any, reusable: bool = True) -> None:
     pool = await _ensure_page_pool()
     is_closed = getattr(page, "isClosed", None)
-    if callable(is_closed) and is_closed():
+    if not reusable or (callable(is_closed) and is_closed()):
+        try:
+            await page.close()
+        except Exception:
+            pass
         global _page_pool_created
         async with _page_pool_lock:
             _page_pool_created = max(0, _page_pool_created - 1)
@@ -193,193 +207,206 @@ async def take_screenshot(
     capture_format: Optional[str] = None,
 ):
     """Take a screenshot of a webpage"""
-    page = None
     async with _get_render_limiter():
-        try:
-            page = await acquire_page()
+        for attempt in range(2):
+            page = None
+            reusable_page = True
+            try:
+                page = await acquire_page()
 
-            # Set viewport
-            await page.setViewport({"width": width, "height": height})
+                # Set viewport
+                await page.setViewport({"width": width, "height": height})
+                await page.setExtraHTTPHeaders(DEFAULT_NAVIGATION_HEADERS)
 
-            normalized_theme = (theme or "").strip().lower()
-            if normalized_theme in ["dark", "light"]:
-                page_any: Any = page
-                emulate_media_features = getattr(page_any, "emulateMediaFeatures", None)
-                if callable(emulate_media_features):
-                    emulate_result = emulate_media_features(
-                        [
-                            {
-                                "name": "prefers-color-scheme",
-                                "value": normalized_theme,
-                            }
-                        ]
+                normalized_theme = (theme or "").strip().lower()
+                if normalized_theme in ["dark", "light"]:
+                    page_any: Any = page
+                    emulate_media_features = getattr(
+                        page_any, "emulateMediaFeatures", None
                     )
-                    if asyncio.iscoroutine(emulate_result):
-                        await cast(Awaitable[Any], emulate_result)
-                else:
-                    console.log(
-                        "emulateMediaFeatures unavailable in this pyppeteer build; using CSS fallback"
-                    )
+                    if callable(emulate_media_features):
+                        emulate_result = emulate_media_features(
+                            [
+                                {
+                                    "name": "prefers-color-scheme",
+                                    "value": normalized_theme,
+                                }
+                            ]
+                        )
+                        if asyncio.iscoroutine(emulate_result):
+                            await cast(Awaitable[Any], emulate_result)
+                    else:
+                        console.log(
+                            "emulateMediaFeatures unavailable in this pyppeteer build; using CSS fallback"
+                        )
 
-            # Navigate to URL with custom timeout
-            page_timeout = timeout_ms if timeout_ms else 30000
-            await page.goto(
-                url, {"waitUntil": "domcontentloaded", "timeout": page_timeout}
-            )
-
-            if normalized_theme in ["dark", "light"]:
-                await page.evaluate(
-                    """
-                    (targetTheme) => {
-                        document.documentElement.style.colorScheme = targetTheme;
-                        document.documentElement.setAttribute('data-shot-theme', targetTheme);
-                    }
-                    """,
-                    normalized_theme,
+                # Navigate to URL with custom timeout
+                page_timeout = timeout_ms if timeout_ms else 30000
+                await page.goto(
+                    url, {"waitUntil": "domcontentloaded", "timeout": page_timeout}
                 )
 
-            # Wait for selectors if specified
-            for selector in selector_list:
+                if normalized_theme in ["dark", "light"]:
+                    await page.evaluate(
+                        """
+                        (targetTheme) => {
+                            document.documentElement.style.colorScheme = targetTheme;
+                            document.documentElement.setAttribute('data-shot-theme', targetTheme);
+                        }
+                        """,
+                        normalized_theme,
+                    )
+
+                for selector in selector_list:
+                    try:
+                        await page.waitForSelector(selector, {"timeout": 5000})
+                    except Exception:
+                        console.log(f"Selector {selector} not found")
+
+                media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
+
                 try:
-                    await page.waitForSelector(selector, {"timeout": 5000})
-                except Exception:
-                    console.log(f"Selector {selector} not found")
+                    await page.evaluate("""
+                        () => {
+                            const isVisible = (el) => {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                const onScreen =
+                                    rect.bottom > 0 &&
+                                    rect.right > 0 &&
+                                    rect.top < window.innerHeight &&
+                                    rect.left < window.innerWidth;
+                                const visible =
+                                    rect.width > 0 &&
+                                    rect.height > 0 &&
+                                    style.display !== 'none' &&
+                                    style.visibility !== 'hidden';
+                                return onScreen && visible;
+                            };
 
-            media_wait_timeout = min(timeout_ms, 5000) if timeout_ms else 5000
+                            const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
+                            console.log(`Found ${videos.length} video elements`);
 
-            # Enhanced video handling
-            try:
-                # Try to play visible videos and wait for a renderable frame
-                await page.evaluate("""
-                    () => {
-                        const isVisible = (el) => {
-                            const rect = el.getBoundingClientRect();
-                            const style = window.getComputedStyle(el);
-                            const onScreen =
-                                rect.bottom > 0 &&
-                                rect.right > 0 &&
-                                rect.top < window.innerHeight &&
-                                rect.left < window.innerWidth;
-                            const visible =
-                                rect.width > 0 &&
-                                rect.height > 0 &&
-                                style.display !== 'none' &&
-                                style.visibility !== 'hidden';
-                            return onScreen && visible;
-                        };
+                            videos.forEach((video, index) => {
+                                video.muted = true;
+                                video.playsInline = true;
+                                video.autoplay = true;
+                                video.preload = video.preload || 'auto';
 
-                        const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
-                        console.log(`Found ${videos.length} video elements`);
-
-                        videos.forEach((video, index) => {
-                            video.muted = true;
-                            video.playsInline = true;
-                            video.autoplay = true;
-                            video.preload = video.preload || 'auto';
-
-                            if (video.readyState >= 1 && video.currentTime === 0) {
-                                try {
-                                    video.currentTime = 0.05;
-                                } catch (err) {
+                                if (video.readyState >= 1 && video.currentTime === 0) {
+                                    try {
+                                        video.currentTime = 0.05;
+                                    } catch (err) {
+                                    }
                                 }
+
+                                video.play().then(() => {
+                                    console.log(`Video ${index} started playing`);
+                                }).catch(err => {
+                                    console.log(`Video ${index} play failed:`, err.message);
+                                });
+                            });
+
+                            return videos.length > 0;
+                        }
+                    """)
+
+                    if timeout_ms:
+                        console.log(
+                            f"Waiting {media_wait_timeout}ms for videos to load..."
+                        )
+                        await page.waitForFunction(
+                            """
+                            () => {
+                                const isVisible = (el) => {
+                                    const rect = el.getBoundingClientRect();
+                                    const style = window.getComputedStyle(el);
+                                    const onScreen =
+                                        rect.bottom > 0 &&
+                                        rect.right > 0 &&
+                                        rect.top < window.innerHeight &&
+                                        rect.left < window.innerWidth;
+                                    const visible =
+                                        rect.width > 0 &&
+                                        rect.height > 0 &&
+                                        style.display !== 'none' &&
+                                        style.visibility !== 'hidden';
+                                    return onScreen && visible;
+                                };
+
+                                const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
+                                if (videos.length === 0) return true;
+
+                                return videos.some((video) => {
+                                    const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+                                    const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
+                                    return hasFrame && hasStarted;
+                                });
                             }
+                            """,
+                            {"timeout": media_wait_timeout},
+                        )
+                    else:
+                        await page.waitForFunction(
+                            """
+                            () => {
+                                const isVisible = (el) => {
+                                    const rect = el.getBoundingClientRect();
+                                    const style = window.getComputedStyle(el);
+                                    const onScreen =
+                                        rect.bottom > 0 &&
+                                        rect.right > 0 &&
+                                        rect.top < window.innerHeight &&
+                                        rect.left < window.innerWidth;
+                                    const visible =
+                                        rect.width > 0 &&
+                                        rect.height > 0 &&
+                                        style.display !== 'none' &&
+                                        style.visibility !== 'hidden';
+                                    return onScreen && visible;
+                                };
 
-                            video.play().then(() => {
-                                console.log(`Video ${index} started playing`);
-                            }).catch(err => {
-                                console.log(`Video ${index} play failed:`, err.message);
-                            });
-                        });
+                                const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
+                                if (videos.length === 0) return true;
+                                return videos.some((video) => {
+                                    const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+                                    const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
+                                    return hasFrame && hasStarted;
+                                });
+                            }
+                            """,
+                            {"timeout": 5000},
+                        )
 
-                        return videos.length > 0;
-                    }
-                """)
+                except Exception as exc:
+                    console.log(f"Video handling failed: {exc}")
+                    await asyncio.sleep(1)
 
-                if timeout_ms:
-                    console.log(f"Waiting {media_wait_timeout}ms for videos to load...")
-                    await page.waitForFunction(
-                        """
-                        () => {
-                            const isVisible = (el) => {
-                                const rect = el.getBoundingClientRect();
-                                const style = window.getComputedStyle(el);
-                                const onScreen =
-                                    rect.bottom > 0 &&
-                                    rect.right > 0 &&
-                                    rect.top < window.innerHeight &&
-                                    rect.left < window.innerWidth;
-                                const visible =
-                                    rect.width > 0 &&
-                                    rect.height > 0 &&
-                                    style.display !== 'none' &&
-                                    style.visibility !== 'hidden';
-                                return onScreen && visible;
-                            };
+                screenshot_options: dict[str, Any] = {"path": output, "fullPage": False}
+                if capture_format == "jpeg":
+                    screenshot_options["type"] = "jpeg"
+                    screenshot_options["quality"] = 80
+                elif capture_format == "png":
+                    screenshot_options["type"] = "png"
 
-                            const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
-                            if (videos.length === 0) return true;
-
-                            return videos.some((video) => {
-                                const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
-                                const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
-                                return hasFrame && hasStarted;
-                            });
-                        }
-                        """,
-                        {"timeout": media_wait_timeout},
-                    )
-                else:
-                    await page.waitForFunction(
-                        """
-                        () => {
-                            const isVisible = (el) => {
-                                const rect = el.getBoundingClientRect();
-                                const style = window.getComputedStyle(el);
-                                const onScreen =
-                                    rect.bottom > 0 &&
-                                    rect.right > 0 &&
-                                    rect.top < window.innerHeight &&
-                                    rect.left < window.innerWidth;
-                                const visible =
-                                    rect.width > 0 &&
-                                    rect.height > 0 &&
-                                    style.display !== 'none' &&
-                                    style.visibility !== 'hidden';
-                                return onScreen && visible;
-                            };
-
-                            const videos = Array.from(document.querySelectorAll('video')).filter(isVisible);
-                            if (videos.length === 0) return true;
-                            return videos.some((video) => {
-                                const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
-                                const hasStarted = video.currentTime > 0 || !video.paused || video.ended;
-                                return hasFrame && hasStarted;
-                            });
-                        }
-                        """,
-                        {"timeout": 5000},
-                    )
-
+                await page.screenshot(screenshot_options)
+                return True
             except Exception as exc:
-                console.log(f"Video handling failed: {exc}")
-                await asyncio.sleep(1)
+                if _is_connection_closed_error(exc):
+                    reusable_page = False
+                    console.log(
+                        "Browser connection closed; resetting browser and retrying"
+                    )
+                    await close_browser()
+                    if attempt == 0:
+                        continue
+                console.log(f"Screenshot failed: {str(exc)}")
+                return False
+            finally:
+                if page is not None:
+                    await release_page(page, reusable=reusable_page)
 
-            screenshot_options: dict[str, Any] = {"path": output, "fullPage": False}
-            if capture_format == "jpeg":
-                screenshot_options["type"] = "jpeg"
-                screenshot_options["quality"] = 80
-            elif capture_format == "png":
-                screenshot_options["type"] = "png"
-
-            # Take screenshot
-            await page.screenshot(screenshot_options)
-            return True
-        except Exception as exc:
-            console.log(f"Screenshot failed: {str(exc)}")
-            return False
-        finally:
-            if page is not None:
-                await release_page(page)
+    return False
 
 
 async def _run_command(cmd: list[str]) -> None:

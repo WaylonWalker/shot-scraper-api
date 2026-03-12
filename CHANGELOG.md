@@ -1,3 +1,9 @@
+## 0.0.39
+- Prefer HTML when Chromium navigates to screenshot targets by setting browser-like `Accept` and `Accept-Language` headers
+- Reset the shared browser and retry once when a worker hits `Connection is closed`
+- Discard broken pages from the page pool instead of reusing them
+- Add tests for browser recovery and navigation header setup
+
 ## 0.0.38
 - Add `POST /queue/cleanup` to remove stale queued and processing jobs along with old completed and failed jobs
 - Extend queue cleanup to support `stale_age_minutes` and `dry_run` for safer operations
