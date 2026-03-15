@@ -1,3 +1,9 @@
+## 0.0.40
+- Limit dashboard URL rows and filenames by default so large datasets stay responsive
+- Add `limit` and `filenames_per_url` query parameters to `/dashboard`
+- Show how many rows are displayed and when filename lists are truncated
+- Add tests for dashboard row limiting and filename trimming
+
 ## 0.0.39
 - Prefer HTML when Chromium navigates to screenshot targets by setting browser-like `Accept` and `Accept-Language` headers
 - Reset the shared browser and retry once when a worker hits `Connection is closed`

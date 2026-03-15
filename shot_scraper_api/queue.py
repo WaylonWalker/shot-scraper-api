@@ -152,7 +152,12 @@ class QueueBase:
     def record_url_request(self, url: str, filename: str, method: str) -> None:
         raise NotImplementedError
 
-    def get_url_stats(self) -> Dict[str, Any]:
+    def get_url_stats(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        filenames_per_url: Optional[int] = None,
+    ) -> Dict[str, Any]:
         raise NotImplementedError
 
     def get_active_jobs(self) -> List[Dict[str, Any]]:
@@ -167,7 +172,12 @@ class QueueBase:
         raise NotImplementedError
 
 
-def _build_url_stats(url_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_url_stats(
+    url_rows: List[Dict[str, Any]],
+    limit: Optional[int] = None,
+    offset: int = 0,
+    filenames_per_url: Optional[int] = None,
+) -> Dict[str, Any]:
     """Build aggregate URL request stats from stored rows."""
     sorted_rows = sorted(
         url_rows,
@@ -177,10 +187,38 @@ def _build_url_stats(url_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             str(row.get("url", "")),
         ),
     )
+    total_urls = len(sorted_rows)
+    if offset < 0:
+        offset = 0
+    if isinstance(limit, int) and limit > 0:
+        sorted_rows = sorted_rows[offset : offset + limit]
+    elif offset:
+        sorted_rows = sorted_rows[offset:]
+
+    trimmed_rows = []
+    for row in sorted_rows:
+        filenames = row.get("filenames", [])
+        if not isinstance(filenames, list):
+            filenames = []
+        total_filenames = len(filenames)
+        if isinstance(filenames_per_url, int) and filenames_per_url > 0:
+            filenames = filenames[:filenames_per_url]
+
+        trimmed_rows.append(
+            {
+                **row,
+                "filenames": filenames,
+                "total_filenames": total_filenames,
+                "truncated_filenames": max(0, total_filenames - len(filenames)),
+            }
+        )
+
     return {
-        "total_urls": len(sorted_rows),
-        "total_requests": sum(int(row.get("request_count", 0)) for row in sorted_rows),
-        "urls": sorted_rows,
+        "total_urls": total_urls,
+        "shown_urls": len(trimmed_rows),
+        "offset": offset,
+        "total_requests": sum(int(row.get("request_count", 0)) for row in url_rows),
+        "urls": trimmed_rows,
     }
 
 
@@ -447,11 +485,21 @@ class ScreenshotQueue(QueueBase):
         }
         self.cache.set(self.url_stats_key, url_stats)
 
-    def get_url_stats(self) -> Dict[str, Any]:
+    def get_url_stats(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        filenames_per_url: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """List tracked URL request counts and generated files."""
         url_stats_raw = self.cache.get(self.url_stats_key)
         url_stats = url_stats_raw if isinstance(url_stats_raw, dict) else {}
-        return _build_url_stats(list(url_stats.values()))
+        return _build_url_stats(
+            list(url_stats.values()),
+            limit=limit,
+            offset=offset,
+            filenames_per_url=filenames_per_url,
+        )
 
     def cleanup_old_jobs(
         self,
@@ -896,11 +944,21 @@ class RedisQueue(QueueBase):
         }
         self.redis.hset(self.url_stats_key, url, json.dumps(updated))
 
-    def get_url_stats(self) -> Dict[str, Any]:
+    def get_url_stats(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        filenames_per_url: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """List tracked URL request counts and generated files."""
         raw = self.redis.hgetall(self.url_stats_key)
         rows = [json.loads(value) for value in raw.values()]
-        return _build_url_stats(rows)
+        return _build_url_stats(
+            rows,
+            limit=limit,
+            offset=offset,
+            filenames_per_url=filenames_per_url,
+        )
 
     def get_active_jobs(self) -> List[Dict[str, Any]]:
         """List queued and processing jobs."""

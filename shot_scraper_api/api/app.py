@@ -431,10 +431,20 @@ def get(request: Request):
 @app.get("/dashboard")
 @app.get("/dashboard/")
 @app.get("/dashboard/urls")
-def get_url_dashboard(request: Request):
+def get_url_dashboard(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=1000),
+    page: int = Query(default=1, ge=1),
+    filenames_per_url: int = Query(default=3, ge=1, le=20),
+):
     """Render a small dashboard for tracked URL request stats."""
     queue = get_queue()
-    stats = queue.get_url_stats()
+    offset = (page - 1) * limit
+    stats = queue.get_url_stats(
+        limit=limit,
+        offset=offset,
+        filenames_per_url=filenames_per_url,
+    )
     queue_stats = queue.get_queue_stats()
     now = time.time()
     active_jobs = []
@@ -494,6 +504,24 @@ def get_url_dashboard(request: Request):
         ],
         "queue_backend": (config.queue_backend or "auto").lower(),
     }
+    total_pages = max(1, (stats["total_urls"] + limit - 1) // limit)
+
+    def _page_url(target_page: int) -> str:
+        params = dict(request.query_params)
+        params["page"] = str(target_page)
+        params["limit"] = str(limit)
+        params["filenames_per_url"] = str(filenames_per_url)
+        return str(request.url.include_query_params(**params))
+
+    pagination = {
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+        "prev_url": _page_url(page - 1) if page > 1 else None,
+        "next_url": _page_url(page + 1) if page < total_pages else None,
+    }
     response = templates.TemplateResponse(
         "url_dashboard.html",
         {
@@ -503,6 +531,10 @@ def get_url_dashboard(request: Request):
             "active_jobs": active_jobs,
             "storage": storage,
             "refreshed_at": int(now),
+            "dashboard_limit": limit,
+            "dashboard_page": page,
+            "filenames_per_url": filenames_per_url,
+            "pagination": pagination,
         },
     )
     for key, value in _no_cache_headers().items():

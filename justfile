@@ -18,7 +18,7 @@ run:
     podman run --env-file .env -p 5050:5000 registry.wayl.one/shot-scraper-api
 
 dev:
-    uv run uvicorn shot_scraper_api.api.app:app --host 0.0.0.0 --port 5000
+    uv run uvicorn shot_scraper_api.api.app:app --host 0.0.0.0 --port 5005
 
 clean-dev:
     rm -rf /tmp/shot-scraper-queue .cache/shots .cache/shots-local

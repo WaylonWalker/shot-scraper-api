@@ -45,15 +45,18 @@ class FakeQueue:
             "success_rate_percent": 100.0,
         }
 
-    def get_url_stats(self):
+    def get_url_stats(self, limit=None, offset=0, filenames_per_url=None):
+        from shot_scraper_api.queue import _build_url_stats
+
         rows = sorted(
             self.url_stats.values(), key=lambda row: (-row["request_count"], row["url"])
         )
-        return {
-            "total_urls": len(rows),
-            "total_requests": sum(row["request_count"] for row in rows),
-            "urls": rows,
-        }
+        return _build_url_stats(
+            rows,
+            limit=limit,
+            offset=offset,
+            filenames_per_url=filenames_per_url,
+        )
 
     def get_active_jobs(self):
         return self.active_jobs
@@ -164,12 +167,16 @@ def test_url_stats_endpoint_lists_tracked_urls(monkeypatch):
     assert stats.status_code == 200
     assert stats.json() == {
         "total_urls": 1,
+        "shown_urls": 1,
+        "offset": 0,
         "total_requests": 2,
         "urls": [
             {
                 "url": "https://example.com",
                 "request_count": 2,
                 "filenames": [expected_filename],
+                "total_filenames": 1,
+                "truncated_filenames": 0,
                 "method_counts": {"POST": 2},
                 "first_requested_at": 1.0,
                 "last_requested_at": 1.0,
@@ -236,6 +243,122 @@ def test_url_dashboard_renders_tracked_stats(monkeypatch):
     assert "Updated at 11" in response.text
     assert "https://example.com" in response.text
     assert "example.webp" in response.text
+
+
+def test_dashboard_limits_url_rows_and_filenames(monkeypatch):
+    queue = FakeQueue()
+    queue.url_stats = {
+        "https://one.example": {
+            "url": "https://one.example",
+            "request_count": 3,
+            "filenames": ["a.jpg", "b.jpg", "c.jpg"],
+            "method_counts": {"GET": 3},
+            "first_requested_at": 1.0,
+            "last_requested_at": 2.0,
+        },
+        "https://two.example": {
+            "url": "https://two.example",
+            "request_count": 2,
+            "filenames": ["d.jpg"],
+            "method_counts": {"GET": 2},
+            "first_requested_at": 1.0,
+            "last_requested_at": 2.0,
+        },
+    }
+
+    def fake_get_url_stats(limit=None, offset=0, filenames_per_url=None):
+        from shot_scraper_api.queue import _build_url_stats
+
+        return _build_url_stats(
+            list(queue.url_stats.values()),
+            limit=limit,
+            offset=offset,
+            filenames_per_url=filenames_per_url,
+        )
+
+    fake_config = SimpleNamespace(
+        queue_processor_enabled=False,
+        storage_backend="s3",
+        local_storage_dir=None,
+        aws_bucket_name=None,
+        aws_endpoint_url=None,
+        queue_backend="auto",
+        queue_processor_concurrency=2,
+        render_concurrency=3,
+        postprocess_concurrency=1,
+    )
+
+    async def fake_browser_lifecycle() -> None:
+        return None
+
+    monkeypatch.setattr(queue, "get_url_stats", fake_get_url_stats)
+    monkeypatch.setattr(app_module, "config", fake_config)
+    monkeypatch.setattr(app_module, "get_queue", lambda: queue)
+    monkeypatch.setattr(app_module.time, "time", lambda: 11.0)
+    monkeypatch.setattr(app_module, "warm_browser", fake_browser_lifecycle)
+    monkeypatch.setattr(app_module, "close_browser", fake_browser_lifecycle)
+
+    with TestClient(app) as client:
+        response = client.get("/dashboard", params={"limit": 1, "filenames_per_url": 1})
+
+    assert response.status_code == 200
+    assert "Page 1 of 2" in response.text
+    assert "+2 more" in response.text
+    assert "Next" in response.text
+    assert "https://one.example" in response.text
+    assert "https://two.example" not in response.text
+
+
+def test_dashboard_second_page_shows_later_rows(monkeypatch):
+    queue = FakeQueue()
+    queue.url_stats = {
+        "https://one.example": {
+            "url": "https://one.example",
+            "request_count": 3,
+            "filenames": ["a.jpg"],
+            "method_counts": {"GET": 3},
+            "first_requested_at": 1.0,
+            "last_requested_at": 2.0,
+        },
+        "https://two.example": {
+            "url": "https://two.example",
+            "request_count": 2,
+            "filenames": ["b.jpg"],
+            "method_counts": {"GET": 2},
+            "first_requested_at": 1.0,
+            "last_requested_at": 2.0,
+        },
+    }
+
+    fake_config = SimpleNamespace(
+        queue_processor_enabled=False,
+        storage_backend="s3",
+        local_storage_dir=None,
+        aws_bucket_name=None,
+        aws_endpoint_url=None,
+        queue_backend="auto",
+        queue_processor_concurrency=2,
+        render_concurrency=3,
+        postprocess_concurrency=1,
+    )
+
+    async def fake_browser_lifecycle() -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "config", fake_config)
+    monkeypatch.setattr(app_module, "get_queue", lambda: queue)
+    monkeypatch.setattr(app_module.time, "time", lambda: 11.0)
+    monkeypatch.setattr(app_module, "warm_browser", fake_browser_lifecycle)
+    monkeypatch.setattr(app_module, "close_browser", fake_browser_lifecycle)
+
+    with TestClient(app) as client:
+        response = client.get("/dashboard", params={"limit": 1, "page": 2})
+
+    assert response.status_code == 200
+    assert "Page 2 of 2" in response.text
+    assert "Previous" in response.text
+    assert "https://one.example" not in response.text
+    assert "https://two.example" in response.text
 
 
 def test_queue_cleanup_endpoint_returns_cleanup_counts(monkeypatch):

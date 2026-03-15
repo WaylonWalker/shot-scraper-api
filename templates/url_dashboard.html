@@ -15,11 +15,20 @@
 {% block content %}
 <main class="dashboard-shell">
     <header class="dashboard-header">
-        <div>
+        <div class="dashboard-heading">
             <h1>URL dashboard</h1>
-            <p>Queue status and URL history.</p>
+            <p>Queue status and recent URL history.</p>
         </div>
-        <p class="dashboard-refresh-note">Updated at {{ refreshed_at }}. Refreshes every 5 seconds.</p>
+        <dl class="dashboard-header-meta">
+            <div>
+                <dt>Updated</dt>
+                <dd>{{ refreshed_at }}</dd>
+            </div>
+            <div>
+                <dt>Refresh</dt>
+                <dd>Every 5s</dd>
+            </div>
+        </dl>
     </header>
 
     <section class="dashboard-summary" aria-label="Summary">
@@ -47,7 +56,7 @@
         <aside class="dashboard-sidebar">
             <section class="dashboard-section">
                 <div class="dashboard-section-header">
-                    <h2>Environment</h2>
+                    <h2>Storage</h2>
                 </div>
                 <dl class="dashboard-meta-list">
                     {% for item in storage.details %}
@@ -60,6 +69,14 @@
                         <dt>Queue backend</dt>
                         <dd class="dashboard-code">{{ storage.queue_backend }}</dd>
                     </div>
+                </dl>
+            </section>
+
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>Queue</h2>
+                </div>
+                <dl class="dashboard-meta-list">
                     {% for item in storage.runtime %}
                     <div>
                         <dt>{{ item.label }}</dt>
@@ -141,14 +158,22 @@
                     </table>
                 </div>
                 {% else %}
-                <p class="dashboard-empty">No queued or processing jobs right now.</p>
+                <div class="dashboard-section-body">
+                    <p class="dashboard-empty">No queued or processing jobs right now.</p>
+                </div>
                 {% endif %}
             </section>
 
             <section class="dashboard-section">
                 <div class="dashboard-section-header">
                     <h2>Top URLs</h2>
-                    <p>{{ stats.urls|length }} rows</p>
+                    <p>{{ stats.shown_urls }} of {{ stats.total_urls }}</p>
+                </div>
+
+                <div class="dashboard-section-toolbar">
+                    <span>Page {{ dashboard_page }} of {{ pagination.total_pages }}</span>
+                    <span>{{ dashboard_limit }} URLs per page</span>
+                    <span>{{ filenames_per_url }} files per URL</span>
                 </div>
 
                 {% if stats.urls %}
@@ -181,6 +206,9 @@
                                         {% for filename in row.filenames %}
                                         <a href="/shot/{{ filename }}" class="dashboard-file-link" title="{{ filename }}">{{ filename }}</a>
                                         {% endfor %}
+                                        {% if row.truncated_filenames %}
+                                        <span class="dashboard-more-files">+{{ row.truncated_filenames }} more</span>
+                                        {% endif %}
                                     </div>
                                 </td>
                             </tr>
@@ -190,6 +218,22 @@
                 </div>
                 {% else %}
                 <p class="dashboard-empty">No URL requests have been tracked yet.</p>
+                {% endif %}
+
+                {% if pagination.total_pages > 1 %}
+                <div class="dashboard-pagination">
+                    {% if pagination.has_prev %}
+                    <a href="{{ pagination.prev_url }}" class="dashboard-page-link">Previous</a>
+                    {% else %}
+                    <span class="dashboard-page-link dashboard-page-link--disabled">Previous</span>
+                    {% endif %}
+                    <span class="dashboard-page-status">{{ stats.shown_urls }} rows on this page</span>
+                    {% if pagination.has_next %}
+                    <a href="{{ pagination.next_url }}" class="dashboard-page-link">Next</a>
+                    {% else %}
+                    <span class="dashboard-page-link dashboard-page-link--disabled">Next</span>
+                    {% endif %}
+                </div>
                 {% endif %}
             </section>
         </div>
