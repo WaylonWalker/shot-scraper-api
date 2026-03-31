@@ -171,6 +171,14 @@ class QueueBase:
     ) -> Dict[str, int]:
         raise NotImplementedError
 
+    def record_worker_heartbeat(
+        self, worker_id: str, timestamp: Optional[float] = None
+    ) -> None:
+        raise NotImplementedError
+
+    def get_worker_heartbeat(self, worker_id: str) -> Optional[float]:
+        raise NotImplementedError
+
 
 def _build_url_stats(
     url_rows: List[Dict[str, Any]],
@@ -242,6 +250,7 @@ class ScreenshotQueue(QueueBase):
         self.job_counter_key = "job_counter"
         self.job_index_key = "job_by_filename"
         self.url_stats_key = "url_request_stats"
+        self.worker_heartbeat_key = "worker_heartbeats"
 
     def _get_next_job_id(self) -> str:
         """Get next job ID"""
@@ -567,6 +576,22 @@ class ScreenshotQueue(QueueBase):
 
         return removed_counts
 
+    def record_worker_heartbeat(
+        self, worker_id: str, timestamp: Optional[float] = None
+    ) -> None:
+        heartbeats_raw = self.cache.get(self.worker_heartbeat_key)
+        heartbeats = heartbeats_raw if isinstance(heartbeats_raw, dict) else {}
+        heartbeats[worker_id] = float(
+            timestamp if timestamp is not None else time.time()
+        )
+        self.cache.set(self.worker_heartbeat_key, heartbeats)
+
+    def get_worker_heartbeat(self, worker_id: str) -> Optional[float]:
+        heartbeats_raw = self.cache.get(self.worker_heartbeat_key)
+        heartbeats = heartbeats_raw if isinstance(heartbeats_raw, dict) else {}
+        value = heartbeats.get(worker_id)
+        return float(value) if isinstance(value, (int, float)) else None
+
 
 class RedisQueue(QueueBase):
     def __init__(self, redis_url: str, namespace: str = "shot-scraper"):
@@ -580,6 +605,7 @@ class RedisQueue(QueueBase):
         self.stats_key = f"{namespace}:stats"
         self.completed_timestamps_key = f"{namespace}:completed_timestamps"
         self.url_stats_key = f"{namespace}:url_request_stats"
+        self.worker_heartbeats_key = f"{namespace}:worker_heartbeats"
 
     def _rebuild_stats(self) -> None:
         """Rebuild aggregate stats from stored jobs."""
@@ -1018,6 +1044,16 @@ class RedisQueue(QueueBase):
             self._rebuild_stats()
 
         return removed_counts
+
+    def record_worker_heartbeat(
+        self, worker_id: str, timestamp: Optional[float] = None
+    ) -> None:
+        heartbeat_time = float(timestamp if timestamp is not None else time.time())
+        self.redis.hset(self.worker_heartbeats_key, worker_id, heartbeat_time)
+
+    def get_worker_heartbeat(self, worker_id: str) -> Optional[float]:
+        value = self.redis.hget(self.worker_heartbeats_key, worker_id)
+        return float(value) if value is not None else None
 
 
 # Global queue instance

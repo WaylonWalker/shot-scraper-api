@@ -163,12 +163,17 @@ def _parse_theme(theme: Optional[str]) -> Optional[str]:
     return normalized_theme
 
 
+def _format_to_media_type(format: str) -> str:
+    """Map format string to correct media type."""
+    return {"jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(format, f"image/{format}")
+
+
 def _image_headers(format: str, status: str = "ready") -> Dict[str, str]:
     """Build common image response headers."""
     return {
         "Cache-Control": "public, max-age=86400, s-maxage=86400, immutable",
         "CDN-Cache-Control": "public, s-maxage=86400, immutable",
-        "Content-Type": f"image/{format}",
+        "Content-Type": _format_to_media_type(format),
         "Access-Control-Allow-Origin": "*",
         "Cross-Origin-Resource-Policy": "cross-origin",
         "X-Screenshot-Status": status,
@@ -189,7 +194,7 @@ def _status_headers(
 ) -> Dict[str, str]:
     """Build headers for non-ready HEAD screenshot responses."""
     headers = {
-        "Content-Type": f"image/{format}",
+        "Content-Type": _format_to_media_type(format),
         "Access-Control-Allow-Origin": "*",
         "Cross-Origin-Resource-Policy": "cross-origin",
         "X-Screenshot-Status": status,
@@ -246,7 +251,7 @@ async def _serve_image(filename: str, format: str, method: str):
     imgdata = await config.s3_client.get_file(filename)
     return StreamingResponse(
         content=imgdata,
-        media_type=f"image/{format}",
+        media_type=_format_to_media_type(format),
         headers=_image_headers(format),
     )
 

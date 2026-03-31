@@ -36,6 +36,9 @@ class Config(BaseSettings):
     queue_processor_concurrency: int = Field(2)
     render_concurrency: Optional[int] = Field(None)
     postprocess_concurrency: Optional[int] = Field(None)
+    worker_heartbeat_interval_seconds: int = Field(10)
+    worker_heartbeat_timeout_seconds: int = Field(45)
+    worker_stalled_queue_threshold_seconds: int = Field(180)
 
     class Config:
         env_file = ".env"
@@ -93,6 +96,9 @@ class SafeConfig(Config):
             queue_processor_concurrency=config.queue_processor_concurrency,
             render_concurrency=config.render_concurrency,
             postprocess_concurrency=config.postprocess_concurrency,
+            worker_heartbeat_interval_seconds=config.worker_heartbeat_interval_seconds,
+            worker_heartbeat_timeout_seconds=config.worker_heartbeat_timeout_seconds,
+            worker_stalled_queue_threshold_seconds=config.worker_stalled_queue_threshold_seconds,
         )
 
 

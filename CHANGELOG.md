@@ -1,3 +1,8 @@
+## 0.0.42
+- Add worker heartbeats so Kubernetes can detect workers that are alive but no longer draining the queue
+- Fail worker liveness checks when queued jobs stall without any active processing
+- Add unit tests for worker health decisions and queue stall detection
+
 ## 0.0.40
 - Limit dashboard URL rows and filenames by default so large datasets stay responsive
 - Add `limit` and `filenames_per_url` query parameters to `/dashboard`
