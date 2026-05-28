@@ -1,0 +1,242 @@
+{% extends 'base.html' %}
+{% block title %}URL Dashboard{% endblock %}
+{% block description %}Tracked URL request dashboard{% endblock %}
+{% block head %}
+    {{ super() }}
+    <meta http-equiv="refresh" content="5" />
+    <script>
+        window.setTimeout(function () {
+            var nextUrl = new URL(window.location.href);
+            nextUrl.searchParams.set("_dashboard_refresh", String(Date.now()));
+            window.location.replace(nextUrl.toString());
+        }, 5000);
+    </script>
+{% endblock %}
+{% block content %}
+<main class="dashboard-shell">
+    <header class="dashboard-header">
+        <div class="dashboard-heading">
+            <h1>URL dashboard</h1>
+            <p>Queue status and recent URL history.</p>
+        </div>
+        <dl class="dashboard-header-meta">
+            <div>
+                <dt>Updated</dt>
+                <dd>{{ refreshed_at }}</dd>
+            </div>
+            <div>
+                <dt>Refresh</dt>
+                <dd>Every 5s</dd>
+            </div>
+        </dl>
+    </header>
+
+    <section class="dashboard-summary" aria-label="Summary">
+        <dl class="dashboard-summary-grid">
+            <div>
+                <dt>Tracked URLs</dt>
+                <dd class="dashboard-number">{{ stats.total_urls }}</dd>
+            </div>
+            <div>
+                <dt>Total requests</dt>
+                <dd class="dashboard-number">{{ stats.total_requests }}</dd>
+            </div>
+            <div>
+                <dt>Queued now</dt>
+                <dd class="dashboard-number">{{ queue_stats.queued }}</dd>
+            </div>
+            <div>
+                <dt>Processing now</dt>
+                <dd class="dashboard-number">{{ queue_stats.processing }}</dd>
+            </div>
+        </dl>
+    </section>
+
+    <section class="dashboard-layout">
+        <aside class="dashboard-sidebar">
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>Storage</h2>
+                </div>
+                <dl class="dashboard-meta-list">
+                    {% for item in storage.details %}
+                    <div>
+                        <dt>{{ item.label }}</dt>
+                        <dd class="dashboard-code">{{ item.value }}</dd>
+                    </div>
+                    {% endfor %}
+                    <div>
+                        <dt>Queue backend</dt>
+                        <dd class="dashboard-code">{{ storage.queue_backend }}</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>Queue</h2>
+                </div>
+                <dl class="dashboard-meta-list">
+                    {% for item in storage.runtime %}
+                    <div>
+                        <dt>{{ item.label }}</dt>
+                        <dd>{{ item.value }}</dd>
+                    </div>
+                    {% endfor %}
+                    <div>
+                        <dt>Queued</dt>
+                        <dd>{{ queue_stats.queued }}</dd>
+                    </div>
+                    <div>
+                        <dt>Processing</dt>
+                        <dd>{{ queue_stats.processing }}</dd>
+                    </div>
+                    <div>
+                        <dt>Completed</dt>
+                        <dd>{{ queue_stats.completed }}</dd>
+                    </div>
+                    <div>
+                        <dt>Failed</dt>
+                        <dd>{{ queue_stats.failed }}</dd>
+                    </div>
+                    <div>
+                        <dt>Queued avg age</dt>
+                        <dd>{{ queue_stats.queued_avg_age_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Oldest queued</dt>
+                        <dd>{{ queue_stats.queued_oldest_age_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Processing avg age</dt>
+                        <dd>{{ queue_stats.processing_avg_age_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Render avg time</dt>
+                        <dd>{{ queue_stats.avg_processing_time_seconds }}s</dd>
+                    </div>
+                    <div>
+                        <dt>Success rate</dt>
+                        <dd>{{ queue_stats.success_rate_percent }}%</dd>
+                    </div>
+                </dl>
+            </section>
+        </aside>
+
+        <div class="dashboard-main">
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>In flight</h2>
+                    <p>{{ active_jobs|length }} active jobs</p>
+                </div>
+
+                {% if active_jobs %}
+                <div class="dashboard-table-wrap">
+                    <table class="dashboard-table dashboard-table--compact">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Job</th>
+                                <th>Worker time</th>
+                                <th>Queued</th>
+                                <th>Priority</th>
+                                <th>URL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for job in active_jobs %}
+                            <tr>
+                                <td class="dashboard-status-text dashboard-status-text--{{ job.status }}">{{ job.status }}</td>
+                                <td><a href="/job/{{ job.job_id }}" class="dashboard-job-link dashboard-code">{{ job.job_id }}</a></td>
+                                <td>{{ job.worker_seconds }}s</td>
+                                <td>{% if job.queued_seconds %}{{ job.queued_seconds }}s{% else %}-{% endif %}</td>
+                                <td>{{ job.priority }}</td>
+                                <td class="dashboard-url-cell"><a href="{{ job.url }}" target="_blank" rel="noreferrer" title="{{ job.url }}">{{ job.url }}</a></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="dashboard-section-body">
+                    <p class="dashboard-empty">No queued or processing jobs right now.</p>
+                </div>
+                {% endif %}
+            </section>
+
+            <section class="dashboard-section">
+                <div class="dashboard-section-header">
+                    <h2>Top URLs</h2>
+                    <p>{{ stats.shown_urls }} of {{ stats.total_urls }}</p>
+                </div>
+
+                <div class="dashboard-section-toolbar">
+                    <span>Page {{ dashboard_page }} of {{ pagination.total_pages }}</span>
+                    <span>{{ dashboard_limit }} URLs per page</span>
+                    <span>{{ filenames_per_url }} files per URL</span>
+                </div>
+
+                {% if stats.urls %}
+                <div class="dashboard-table-wrap">
+                    <table class="dashboard-table">
+                        <thead>
+                            <tr>
+                                <th>URL</th>
+                                <th>Requests</th>
+                                <th>Methods</th>
+                                <th>Files</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stats.urls %}
+                            <tr>
+                                <td class="dashboard-url-cell">
+                                    <a href="{{ row.url }}" target="_blank" rel="noreferrer" title="{{ row.url }}">{{ row.url }}</a>
+                                </td>
+                                <td>{{ row.request_count }}</td>
+                                <td class="dashboard-methods-cell">
+                                    <div class="dashboard-inline-list">
+                                        {% for method, count in row.method_counts.items() %}
+                                        <span class="dashboard-method">{{ method }} {{ count }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </td>
+                                <td class="dashboard-files-cell">
+                                    <div class="dashboard-inline-list">
+                                        {% for filename in row.filenames %}
+                                        <a href="/shot/{{ filename }}" class="dashboard-file-link" title="{{ filename }}">{{ filename }}</a>
+                                        {% endfor %}
+                                        {% if row.truncated_filenames %}
+                                        <span class="dashboard-more-files">+{{ row.truncated_filenames }} more</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="dashboard-empty">No URL requests have been tracked yet.</p>
+                {% endif %}
+
+                {% if pagination.total_pages > 1 %}
+                <div class="dashboard-pagination">
+                    {% if pagination.has_prev %}
+                    <a href="{{ pagination.prev_url }}" class="dashboard-page-link">Previous</a>
+                    {% else %}
+                    <span class="dashboard-page-link dashboard-page-link--disabled">Previous</span>
+                    {% endif %}
+                    <span class="dashboard-page-status">{{ stats.shown_urls }} rows on this page</span>
+                    {% if pagination.has_next %}
+                    <a href="{{ pagination.next_url }}" class="dashboard-page-link">Next</a>
+                    {% else %}
+                    <span class="dashboard-page-link dashboard-page-link--disabled">Next</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </section>
+        </div>
+    </section>
+</main>
+{% endblock %}

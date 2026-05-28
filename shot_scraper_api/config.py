@@ -1,18 +1,18 @@
 from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
 from pydantic import Field
 from pydantic_settings import BaseSettings
 from rich.console import Console
-from typing import Optional
 
-from shot_scraper_api.s3 import S3Client
+from shot_scraper_api.s3 import LocalStorageClient, S3Client
 
-from pydantic import BaseModel
 
 def redact(value: str | None, keep: int = 4) -> str | None:
     if not value:
         return value
     return value[:keep] + "*" * (len(value) - keep)
-
 
 
 class Config(BaseSettings):
@@ -27,6 +27,18 @@ class Config(BaseSettings):
     docker_repo: Optional[str] = Field(None)
     max_file_size_mb: Optional[int] = Field(100)
     cache_dir: Optional[str] = Field("/cache/")
+    storage_backend: Optional[str] = Field("s3")
+    local_storage_dir: Optional[str] = Field(".cache/shots")
+    redis_url: Optional[str] = Field(None)
+    queue_backend: Optional[str] = Field("auto")
+    queue_namespace: Optional[str] = Field("shot-scraper")
+    queue_processor_enabled: bool = Field(True)
+    queue_processor_concurrency: int = Field(2)
+    render_concurrency: Optional[int] = Field(None)
+    postprocess_concurrency: Optional[int] = Field(None)
+    worker_heartbeat_interval_seconds: int = Field(10)
+    worker_heartbeat_timeout_seconds: int = Field(45)
+    worker_stalled_queue_threshold_seconds: int = Field(180)
 
     class Config:
         env_file = ".env"
@@ -35,8 +47,16 @@ class Config(BaseSettings):
         extra = "allow"
 
     @property
-    def s3_client(self):
+    def storage_client(self):
+        backend = (self.storage_backend or "s3").lower()
+        if backend == "local":
+            storage_dir = Path(self.local_storage_dir or ".cache/shots")
+            return LocalStorageClient(storage_dir=storage_dir)
         return S3Client(self)
+
+    @property
+    def s3_client(self):
+        return self.storage_client
 
     @property
     def s3fs(self):
@@ -58,7 +78,6 @@ class Config(BaseSettings):
 
 
 class SafeConfig(Config):
-
     @classmethod
     def from_config(cls, config):
         return cls(
@@ -68,7 +87,20 @@ class SafeConfig(Config):
             aws_endpoint_url=config.aws_endpoint_url,
             aws_bucket_name=config.aws_bucket_name,
             cache_dir=config.cache_dir,
+            storage_backend=config.storage_backend,
+            local_storage_dir=config.local_storage_dir,
+            redis_url=redact(config.redis_url),
+            queue_backend=config.queue_backend,
+            queue_namespace=config.queue_namespace,
+            queue_processor_enabled=config.queue_processor_enabled,
+            queue_processor_concurrency=config.queue_processor_concurrency,
+            render_concurrency=config.render_concurrency,
+            postprocess_concurrency=config.postprocess_concurrency,
+            worker_heartbeat_interval_seconds=config.worker_heartbeat_interval_seconds,
+            worker_heartbeat_timeout_seconds=config.worker_heartbeat_timeout_seconds,
+            worker_stalled_queue_threshold_seconds=config.worker_stalled_queue_threshold_seconds,
         )
+
 
 @lru_cache()
 def get_config() -> Config:

@@ -1,9 +1,99 @@
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
+import asyncio
 import io
 import logging
 import os
+from pathlib import Path
+from urllib.parse import quote
+
+
+class LocalStorageClient:
+    def __init__(self, storage_dir: Path):
+        self.storage_dir = storage_dir
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, filename: str) -> Path:
+        safe_filename = os.path.basename(filename)
+        return self.storage_dir / safe_filename
+
+    def local_path(self, filename: str) -> Path:
+        return self._path(filename)
+
+    async def upload_file(self, filepath: str, filename: str | None = None) -> str:
+        source = Path(filepath)
+        if not source.exists():
+            raise FileNotFoundError(f"File not found: {filepath}")
+        target_name = filename or source.name
+        target = self._path(target_name)
+        await asyncio.to_thread(target.write_bytes, source.read_bytes())
+        return str(target)
+
+    async def get_file(self, filename: str):
+        target = self._path(filename)
+        if not target.exists():
+            raise FileNotFoundError(f"File not found: {filename}")
+
+        async def stream_response():
+            with target.open("rb") as handle:
+                while True:
+                    chunk = handle.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return stream_response()
+
+    async def get_file_url(self, filename: str, expires_in: int = 31536000) -> str:
+        del expires_in
+        return f"/shot/{quote(filename)}"
+
+    async def delete_file(self, filename: str) -> None:
+        target = self._path(filename)
+        if target.exists():
+            await asyncio.to_thread(target.unlink)
+
+    async def list_files(self, prefix: str = None):
+        files = []
+        prefix_value = prefix or ""
+        for path in sorted(self.storage_dir.iterdir()):
+            if not path.is_file():
+                continue
+            if prefix_value and not path.name.startswith(prefix_value):
+                continue
+            ext = path.suffix.lower().lstrip(".")
+            content_type = {
+                "webp": "image/webp",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "png": "image/png",
+                "gif": "image/gif",
+            }.get(ext, "application/octet-stream")
+            stat = path.stat()
+            files.append(
+                {
+                    "key": path.name,
+                    "size": stat.st_size,
+                    "last_modified": str(stat.st_mtime),
+                    "content_type": content_type,
+                }
+            )
+        return files
+
+    def file_exists(self, filename: str) -> bool:
+        return self._path(filename).exists()
+
+    def generate_presigned_url(
+        self,
+        object_name: str,
+        content_type: str = None,
+        expiration: int = 3600,
+        http_method: str = "put",
+        download: bool = False,
+    ) -> str:
+        del content_type, expiration, http_method, download
+        return f"/shot/{quote(object_name)}"
 
 
 class S3Client:
@@ -89,6 +179,7 @@ class S3Client:
 
             with open(filepath, "rb") as file:
                 self.s3.upload_fileobj(file, self.config.aws_bucket_name, filename)
+            return filename
         except ClientError as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
 
@@ -98,9 +189,9 @@ class S3Client:
             # Check file size
             size = len(content)
 
-            if size > config.MAX_FILE_SIZE:
+            if size > self.config.max_file_size_mb * 1024 * 1024:
                 raise ValueError(
-                    f"File size exceeds maximum allowed size of {config.MAX_FILE_SIZE} bytes"
+                    f"File size exceeds maximum allowed size of {self.config.max_file_size_mb} mb"
                 )
 
             # Create file-like object from bytes
@@ -109,8 +200,8 @@ class S3Client:
             self.s3.upload_fileobj(file_obj, self.config.aws_bucket_name, filename)
 
             # Generate URL based on endpoint
-            if config.AWS_ENDPOINT_URL:
-                url = f"{config.AWS_ENDPOINT_URL}/{self.config.aws_bucket_name}/{filename}"
+            if self.config.aws_endpoint_url:
+                url = f"{self.config.aws_endpoint_url}/{self.config.aws_bucket_name}/{filename}"
             else:
                 url = (
                     f"https://{self.config.aws_bucket_name}.s3.amazonaws.com/{filename}"
@@ -160,7 +251,7 @@ class S3Client:
         except ClientError as e:
             raise Exception(f"Failed to delete file from S3: {str(e)}")
 
-    async def list_files(self, prefix: str = None):
+    async def list_files(self, prefix: str | None = None):
         """List all files in the bucket, optionally filtered by prefix"""
         try:
             params = {"Bucket": self.config.aws_bucket_name}
@@ -216,7 +307,7 @@ class S3Client:
     def generate_presigned_url(
         self,
         object_name: str,
-        content_type: str = None,
+        content_type: str | None = None,
         expiration: int = 3600,
         http_method: str = "put",
         download: bool = False,
@@ -240,7 +331,6 @@ class S3Client:
 
             # MinIO requires the region in the signature to be "us-east-1"
             if self.config.aws_endpoint_url:
-                region = self.config.aws_region or "us-east-1"
                 self.s3.meta.events.register(
                     "choose-signer.s3.*", lambda **kwargs: "s3v4"
                 )

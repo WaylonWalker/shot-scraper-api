@@ -1,1 +1,25 @@
 .env
+
+# VCS + local tooling
+.git
+.github
+.venv
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local data and generated media
+data/
+*.webm
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Local docs and planning notes
+*.md
+
+# Test files are not needed in runtime image
+tests/

@@ -6,16 +6,24 @@ regcred:
     kubectl get secret -n default regcred --output=yaml -o yaml | sed 's/namespace: default/namespace: shot/' | kubectl apply -n shot -f - && echo deployed secret || echo secret exists
 build:
     podman build \
-        -t registry.wayl.one/shot-scraper-api \
-        -t registry.wayl.one/shot-scraper-api:$(hatch version) \
+        -t localhost:5000/shot-scraper-api \
+        -t localhost:5000/shot-scraper-api:$(uv run hatch version) \
         -f Dockerfile .
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:$(hatch version)
     # podman push docker.io/waylonwalker/shot-scraper-api docker.io/waylonwalker/shot-scraper-api:latest
 push:
-    podman push registry.wayl.one/shot-scraper-api:$(hatch version)
-    podman push registry.wayl.one/shot-scraper-api:latest
+    podman push --tls-verify=false localhost:5000/shot-scraper-api:$(uv run hatch version)
+    podman push --tls-verify=false localhost:5000/shot-scraper-api:latest
 run:
     podman run --env-file .env -p 5050:5000 registry.wayl.one/shot-scraper-api
+
+dev:
+    uv run uvicorn shot_scraper_api.api.app:app --host 0.0.0.0 --port 5005
+
+clean-dev:
+    rm -rf /tmp/shot-scraper-queue .cache/shots .cache/shots-local
+    mkdir -p .cache
+    echo cleaned local queue and storage state
 
 create-ns:
     kubectl create ns shot && echo created ns shot || echo namespace shot already exists
